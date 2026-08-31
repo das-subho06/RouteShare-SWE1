@@ -5,10 +5,11 @@
    "paths": { "@/assets/*": ["./assets/*"], "@/*": ["./src/*"] }
   },
   "include": [
-    "**/*.ts",
-    "**/*.tsx",
-    ".expo/types/**/*.ts",
-    "expo-env.d.ts",
-    "nativewind-env.d.ts"
-  ]
+  "**/*.ts",
+  "**/*.tsx",
+  "svg.d.ts",
+  ".expo/types/**/*.ts",
+  "expo-env.d.ts",
+  "nativewind-env.d.ts"
+]
 }
