@@ -928,10 +928,10 @@ return (
 const mobileStyles = StyleSheet.create({
   heroImageWrap: {
     position: 'absolute',
-    right: -10,
-    top: 200,
-    width: 180,
-    height: 210,
+    right: -30,
+    top: 150,
+    width: 260,
+    height: 290,
     overflow: 'hidden',
     zIndex: 3,
   },
@@ -940,8 +940,8 @@ const mobileStyles = StyleSheet.create({
     height: '100%',
   },
   subscriptionsSection: {
-    marginTop: 16,
-    paddingTop: 24,
+    marginTop: 24,
+    paddingTop: 32,
   },
   carouselWrap: {
     width: '100%',
@@ -974,7 +974,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    zIndex:2
+    zIndex:2,
+    elevation: 10,
   },
   navRowWide: {},
   logo: {
@@ -1062,6 +1063,7 @@ carouselWrap: {
   heroBody: {
     marginTop: 20,
     zIndex: 2,
+    elevation: 10
   },
  heroBodyWide: {
   flexDirection: 'row',
@@ -1085,7 +1087,8 @@ carouselWrap: {
     flexDirection: 'row',
     gap: 14,
     marginBottom: 70,
-    zIndex: 2
+    zIndex: 2,
+    elevation: 10
   },
       heroImage: {
     position: 'absolute',
