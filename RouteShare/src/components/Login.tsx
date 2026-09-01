@@ -1,5 +1,7 @@
 // Login.tsx
 import React, { useState } from 'react';
+import { API_URL } from './config';
+import { useRouter } from 'expo-router';
 import {
   View,
   Text,
@@ -71,6 +73,7 @@ function Field({
 }
 
 export default function Login({ onLogin, onPasswordReset }: LoginProps) {
+  const router = useRouter();
   const [designation, setDesignation] = useState<Designation>('user');
   const [mode, setMode] = useState<Mode>('login');
   const [message, setMessage] = useState('');
@@ -96,37 +99,72 @@ export default function Login({ onLogin, onPasswordReset }: LoginProps) {
   };
 
   // ---- Login ----
-  const submitLogin = () => {
-    if (!username || !password) {
-      setMessage('Enter your username and password.');
+  const submitLogin = async () => {
+  if (!username || !password) {
+    setMessage('Enter your username and password.');
+    return;
+  }
+  try {
+    const res = await fetch(`${API_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, designation }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      if (data.error === 'new_user') {
+        setMessage('You are a new user, please signup.');
+      } else if (data.error === 'wrong_password') {
+        setMessage('Password incorrect.');
+      } else {
+        setMessage(data.message || 'Login failed.');
+      }
       return;
     }
-    onLogin?.({ username, password, designation });
+
     setMessage('');
-  };
+    onLogin?.({ username, password, designation }); // parent can also read data.token/data.redirectTo
+    router.replace(data.redirectTo); // '/ride' or '/driverDashboard'
+  } catch (err) {
+    setMessage('Network error. Please try again.');
+  }
+};
 
   // ---- Forgot password: step 1, send code to phone ----
-  const sendCode = () => {
-    if (phone.length !== 10) {
-      setMessage('Enter a valid 10-digit phone number.');
+const sendCode = async () => {
+  if (phone.length !== 10) {
+    setMessage('Enter a valid 10-digit phone number.');
+    return;
+  }
+  try {
+    const res = await fetch(`${API_URL}/otp/send-reset-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMessage(data.error || 'Could not send code.');
       return;
     }
     setOtpSent(true);
     setMessage(`Verification code sent to ${phone}.`);
-    // Wire this up to your actual SMS/OTP provider.
     setMode('forgotOtp');
-  };
+  } catch {
+    setMessage('Network error. Please try again.');
+  }
+}; 
 
   // ---- Forgot password: step 2, verify the code ----
   const verifyCode = () => {
-    if (otp.length !== 6) {
-      setMessage('Enter the 6-digit code sent to your phone.');
-      return;
-    }
-    // Replace with real verification call — this just simulates success.
-    setMessage('');
-    setMode('resetPassword');
-  };
+  if (otp.length !== 6) {
+    setMessage('Enter the 6-digit code sent to your phone.');
+    return;
+  }
+  setMessage('');
+  setMode('resetPassword'); // actual verification happens in submitNewPassword
+};
 
   const resendCode = () => {
     setOtp('');
@@ -134,19 +172,33 @@ export default function Login({ onLogin, onPasswordReset }: LoginProps) {
   };
 
   // ---- Forgot password: step 3, set a new password ----
-  const submitNewPassword = () => {
-    if (newPassword.length < 8) {
-      setMessage('Password should be at least 8 characters.');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setMessage('Passwords don\u2019t match.');
+  const submitNewPassword = async () => {
+  if (newPassword.length < 8) {
+    setMessage('Password should be at least 8 characters.');
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    setMessage('Passwords don\u2019t match.');
+    return;
+  }
+  try {
+    const res = await fetch(`${API_URL}/otp/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, code: otp, newPassword }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMessage(data.error || 'Could not reset password.');
       return;
     }
     onPasswordReset?.({ phone, newPassword, designation });
     setMode('resetDone');
     setMessage('');
-  };
+  } catch {
+    setMessage('Network error. Please try again.');
+  }
+};
 
   const backToLogin = () => {
     resetForgotState();
@@ -290,7 +342,7 @@ export default function Login({ onLogin, onPasswordReset }: LoginProps) {
       <View style={styles.wrap}>
         <Text style={styles.title}>Reset your password</Text>
         <Text style={styles.successMsg}>
-          Enter the phone number linked to your account. We\u2019ll send you a code to verify it\u2019s you.
+          Enter the phone number linked to your account. We will send you a code to verify it's you.
         </Text>
 
         <Field

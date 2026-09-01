@@ -1,4 +1,3 @@
-// Signup.tsx
 import React, { useState } from 'react';
 import {
   View,
@@ -8,7 +7,8 @@ import {
   TextInput,
   Platform,
 } from 'react-native';
-
+import { API_URL } from './config';
+import { useRouter } from 'expo-router';
 // ---------------------------------------------------------------------------
 // Design tokens — mirrors RouteShareLanding's palette
 // ---------------------------------------------------------------------------
@@ -38,6 +38,9 @@ interface SignupProps {
     gender?: Gender;
     dob?: string;
   }) => void;
+  /** Called right before we navigate a rider away to the full /rider page,
+   *  so the parent can dismiss whatever modal is wrapping this form. */
+  onClose?: () => void;
 }
 
 function Field({
@@ -88,14 +91,15 @@ function formatDob(raw: string) {
   return parts.join('/');
 }
 
-export default function Signup({ onSubmit }: SignupProps) {
+export default function Signup({ onSubmit, onClose }: SignupProps) {
+  const router = useRouter();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
   const [aadhar, setAadhar] = useState('');
   const [designation, setDesignation] = useState<Designation>('user');
-
+  const [showVerifiedScreen, setShowVerifiedScreen] = useState(false);
   // Rider-only fields
   const [username, setUsername] = useState('');
   const [gender, setGender] = useState<Gender | ''>('');
@@ -106,30 +110,59 @@ export default function Signup({ onSubmit }: SignupProps) {
   const [otpVerified, setOtpVerified] = useState(false);
   const [message, setMessage] = useState('');
   const [submitted, setSubmitted] = useState(false);
-
+  const [sending, setSending] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const isRider = designation === 'user';
 
-  const sendCode = () => {
-    if (phone.length < 10) {
-      setMessage('Enter a valid 10-digit phone number first.');
-      return;
-    }
+  const sendCode = async () => {
+  if (phone.length < 10) {
+    setMessage('Enter a valid 10-digit phone number first.');
+    return;
+  }
+  setSending(true);
+  try {
+    const res = await fetch(`${API_URL}/otp/send-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Could not send code.');
     setOtpSent(true);
     setMessage(`Verification code sent to ${phone}.`);
-    // Wire this up to your actual SMS/OTP provider.
-  };
+  } catch (err: any) {
+    setMessage(err.message);
+  } finally {
+    setSending(false);
+  }
+};
 
-  const verifyCode = () => {
-    if (otp.length !== 6) {
-      setMessage('Enter the 6-digit code sent to your phone.');
-      return;
-    }
-    // Replace with real verification call — this just simulates success.
+  const verifyCode = async () => {
+  if (otp.length !== 6) {
+    setMessage('Enter the 6-digit code sent to your phone.');
+    return;
+  }
+  setVerifying(true);
+  try {
+    const res = await fetch(`${API_URL}/otp/verify-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, code: otp }),
+    });
+    const result = await res.json();
+    if (!res.ok || !result.verified) throw new Error(result.error || 'Incorrect code.');
     setOtpVerified(true);
     setMessage('Phone number verified.');
-  };
+    setShowVerifiedScreen(true);
+  } catch (err: any) {
+    setMessage(err.message);
+  } finally {
+    setVerifying(false);
+  }
+};
 
-  const submit = () => {
+  const submit = async () => {
     if (!name || !email || !password) {
       setMessage('Fill in your name, email, and password.');
       return;
@@ -161,7 +194,8 @@ export default function Signup({ onSubmit }: SignupProps) {
       }
     }
 
-    onSubmit?.({
+    setMessage('');
+    const payload = {
       name,
       email,
       password,
@@ -169,21 +203,61 @@ export default function Signup({ onSubmit }: SignupProps) {
       aadhar,
       designation,
       ...(isRider ? { username, gender: gender as Gender, dob } : {}),
-    });
-    setSubmitted(true);
-    setMessage('');
-  };
+    };
 
-  if (submitted) {
-    return (
-      <View style={styles.wrap}>
-        <Text style={styles.title}>You\u2019re all set, {name}!</Text>
-        <Text style={styles.successMsg}>
-          Your {designation} account has been created. A confirmation was sent to {email}.
-        </Text>
-      </View>
-    );
-  }
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_URL}/auth/signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Signup failed.');
+
+      onSubmit?.(payload);
+
+      if (isRider) {
+        // Full page, not a box inside this modal — close the modal and navigate.
+        onClose?.();
+        router.push({ pathname: '/rider', params: { name, username } });
+        return;
+      }
+
+      setSubmitted(true);
+    } catch (err: any) {
+      setMessage(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  if (showVerifiedScreen) {
+  return (
+    <View style={styles.wrap}>
+      <Text style={styles.title}>✓ Phone verified!</Text>
+      <Text style={styles.successMsg}>
+        {phone} has been verified successfully. Routing is working — tap continue to finish signing up.
+      </Text>
+      <Pressable
+        onPress={() => setShowVerifiedScreen(false)}
+        style={({ pressed }) => [styles.submitBtn, pressed && { opacity: 0.85 }]}
+      >
+        <Text style={styles.submitLabel}>Continue</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+if (submitted) {
+  return (
+    <View style={styles.wrap}>
+       <Text style={styles.title}>You are all set, {name}!</Text>
+       <Text style={styles.successMsg}>
+         Your {designation} account has been created. A confirmation was sent to {email}.
+      </Text>
+     </View>
+  );
+}
 
   return (
     <View style={styles.wrap}>
@@ -332,9 +406,13 @@ export default function Signup({ onSubmit }: SignupProps) {
 
       <Pressable
         onPress={submit}
-        style={({ pressed }) => [styles.submitBtn, pressed && { opacity: 0.85 }]}
+        disabled={submitting}
+        style={({ pressed }) => [
+          styles.submitBtn,
+          (pressed || submitting) && { opacity: 0.85 },
+        ]}
       >
-        <Text style={styles.submitLabel}>Sign up</Text>
+        <Text style={styles.submitLabel}>{submitting ? 'Signing up…' : 'Sign up'}</Text>
       </Pressable>
     </View>
   );

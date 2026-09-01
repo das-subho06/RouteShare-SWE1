@@ -1,5 +1,7 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { Video, ResizeMode } from 'expo-av';
+import { useRouter } from 'expo-router';
+import Toast from '@/components/Toast';
 import {
   View,
   Text,
@@ -17,6 +19,8 @@ import {
 import Signup from './Signup';
 import Login from './Login';
 import DriverDetails from './Driver';
+import DriverMessage from './Toast';
+import { API_URL } from './config';
 import Svg, { Path } from 'react-native-svg';
 import CardBgSvg from '../../assets/images/cardPhoto1.svg';
 import CardBgSvg2 from '../../assets/images/cardPhoto2.svg';
@@ -38,7 +42,7 @@ const COLORS = {
   textMuted: '#5b5b5b',
   white: '#ffffff',
 };
-
+//API 
 const PHONE_NUMBER = '+15551234567';
 const PLAN_CARD_WIDTH = 260;
 const PLAN_CARD_GAP = 20;
@@ -329,7 +333,6 @@ export default function RouteShareLanding() {
   const [heroSize, setHeroSize] = useState({ width: 0, height: 0 });
   const [expandedPlan, setExpandedPlan] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalKind>(null);
-
   // form state
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPass, setLoginPass] = useState('');
@@ -346,6 +349,23 @@ export default function RouteShareLanding() {
   const [dropoff, setDropoff] = useState('');
   const [bookingConfirmed, setBookingConfirmed] = useState(false);
   const [showDriverDetails, setShowDriverDetails] = useState(false); 
+  const [driverOnboardingDone, setDriverOnboardingDone] = useState(false);
+const [driverName, setDriverName] = useState('');
+  const [signedUpUserId, setSignedUpUserId] = useState<number | null>(null);
+  const [showVerifiedToast, setShowVerifiedToast] = useState(false);
+
+  const router = useRouter();
+useEffect(() => {
+  if (modal === 'signup' && showDriverDetails && driverOnboardingDone) {
+    setModal(null);           // close the signup modal
+    setShowVerifiedToast(true);
+  }
+}, [driverOnboardingDone]);
+
+const handleToastHide = () => {
+  setShowVerifiedToast(false);
+  router.replace('/driverDashboard'); // must match actual route path — see below
+};
   const registerSection = (key: string) => (e: any) => {
     sectionY.current[key] = e.nativeEvent.layout.y;
   };
@@ -377,6 +397,8 @@ export default function RouteShareLanding() {
     setSuMsg('');
     setCSent(false);
     setBookingConfirmed(false);
+    setShowDriverDetails(false);
+    setDriverOnboardingDone(false);
   };
 
   const submitLogin = () => {
@@ -387,13 +409,13 @@ export default function RouteShareLanding() {
     setLoginMsg(`Welcome back, ${loginEmail}! You're logged in.`);
   };
 
-  const submitSignup = () => {
-    if (!suName || !suEmail) {
-      setSuMsg('Fill in your name and email to create an account.');
-      return;
-    }
-    setSuMsg(`You're all set, ${suName}. A confirmation was sent to ${suEmail}.`);
-  };
+  // const submitSignup = () => {
+  //   if (!suName || !suEmail) {
+  //     setSuMsg('Fill in your name and email to create an account.');
+  //     return;
+  //   }
+  //   setSuMsg(`You're all set, ${suName}. A confirmation was sent to ${suEmail}.`);
+  // };
 
   const submitContact = () => {
     if (!cName) {
@@ -596,7 +618,12 @@ const scrollPlans = (direction: 1 | -1) => {
           </Text>
         </View>
       </ScrollView>
-
+            <Toast
+  message="Your account verified"
+  visible={showVerifiedToast}
+  onHide={handleToastHide}
+  duration={1800}
+/>
       {/* ------------------------------------------------------------------ */}
       {/* MODALS                                                            */}
       {/* ------------------------------------------------------------------ */}
@@ -611,6 +638,12 @@ const scrollPlans = (direction: 1 | -1) => {
             <Pressable style={styles.modalClose} onPress={closeModal}>
               <Text style={styles.modalCloseText}>✕</Text>
             </Pressable>
+            <ScrollView
+      style={styles.modalScroll}
+      contentContainerStyle={styles.modalScrollContent}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    >
             {modal === 'login' && (
   <Login
     onLogin={(data) => {
@@ -624,21 +657,60 @@ const scrollPlans = (direction: 1 | -1) => {
     }}
   />
 )}
-{modal === 'signup' && showDriverDetails && (
+{modal === 'signup' && !showDriverDetails && (
+  <Signup
+    onSubmit={async (data) => {
+      try {
+        const res = await fetch(`${API_URL}/signup`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.error || 'Signup failed');
+
+        setSignedUpUserId(result.userId);
+        setDriverName(data.name);
+
+        if (data.designation === 'driver') {
+          setShowDriverDetails(true);
+        }
+        // Riders are routed to the full /rider page from inside Signup
+        // itself (via router.push), so there's nothing to do here for them.
+      } catch (err) {
+        console.error(err);
+      }
+    }}
+    onClose={closeModal}
+  />
+)}
+{modal === 'signup' && showDriverDetails && !driverOnboardingDone && (
   <DriverDetails
-    onSubmit={(vehicleData) => {
-      console.log('driver vehicle data', vehicleData);
-      // send both signup + vehicle data to your backend here
+    onSubmit={async (vehicleData) => {
+      try {
+        const res = await fetch(`${API_URL}/driver-details`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: signedUpUserId, ...vehicleData }),
+        });
+        if (!res.ok) throw new Error('Could not save vehicle details');
+        setDriverOnboardingDone(true);
+      } catch (err) {
+        console.error(err);
+      }
     }}
   />
 )}
+{/* {modal === 'signup' && showDriverDetails && driverOnboardingDone && (
+  <DriverMessage name={driverName} verificationStatus="pending" />
+)} */}
             
       {modal === 'contact' && (
   <>
     <Text style={styles.modalTitle}>Contact us</Text>
     {cSent ? (
       <Text style={styles.modalMsg}>
-        Thanks, {cName}! We\u2019ll get back to you shortly.
+        Thanks, {cName}! We will get back to you shortly.
       </Text>
     ) : (
       <>
@@ -693,6 +765,8 @@ const scrollPlans = (direction: 1 | -1) => {
                 )}
               </>
             )}
+    </ScrollView>
+
           </View>
         </View>
       </Modal>
@@ -997,6 +1071,21 @@ carouselWrap: {
     marginBottom: -10,
   },
 
+  modalCard: {
+  width: '100%',
+  maxWidth: 380,
+  maxHeight: '85%',        // ← new: cap the card so it never exceeds the viewport
+  backgroundColor: COLORS.white,
+  borderRadius: 20,
+  padding: 26,
+},
+modalScroll: {
+  maxHeight: '100%',       // ← new
+},
+modalScrollContent: {
+  paddingBottom: 8,        // ← new: a little breathing room at the bottom
+},
+
   planTitle: {
     fontSize: 15,
     fontWeight: '800',
@@ -1104,13 +1193,7 @@ carouselWrap: {
     justifyContent: 'center',
     padding: 20,
   },
-  modalCard: {
-    width: '100%',
-    maxWidth: 380,
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    padding: 26,
-  },
+  
   modalClose: {
     alignSelf: 'flex-end',
     marginBottom: 6,

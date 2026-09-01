@@ -13,8 +13,8 @@ export default function RootLayout() {
         <SafeAreaProvider>
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="index" />
-          {/* <Stack.Screen name="chat" />
-          <Stack.Screen name="trends" /> */}
+          <Stack.Screen name="rider" />
+          <Stack.Screen name="driverDashboard" />
         </Stack></SafeAreaProvider>
       </ThemeProvider>
     

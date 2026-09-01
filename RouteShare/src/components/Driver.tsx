@@ -90,7 +90,7 @@ function Field({
 }
 
 export default function DriverDetails({
-  initialStatus = 'pending',
+  initialStatus = 'verified',
   onSubmit,
 }: DriverDetailsProps) {
   const [licenseNumber, setLicenseNumber] = useState('');
@@ -134,7 +134,7 @@ export default function DriverDetails({
       <View style={styles.wrap}>
         <Text style={styles.title}>Vehicle details submitted</Text>
         <Text style={styles.successMsg}>
-          We\u2019ll review your documents and update your verification status shortly.
+          We will review your documents and update your verification status shortly.
         </Text>
         <View style={[styles.statusBadge, { backgroundColor: STATUS_STYLES[status].bg }]}>
           <Text style={styles.statusLabel}>{STATUS_STYLES[status].label}</Text>
@@ -147,9 +147,9 @@ export default function DriverDetails({
     <View style={styles.wrap}>
       <Text style={styles.title}>Vehicle & license details</Text>
 
-      <View style={[styles.statusBadge, { backgroundColor: STATUS_STYLES[status].bg, marginBottom: 20 }]}>
+      {/* <View style={[styles.statusBadge, { backgroundColor: STATUS_STYLES[status].bg, marginBottom: 20 }]}>
         <Text style={styles.statusLabel}>{STATUS_STYLES[status].label}</Text>
-      </View>
+      </View> */}
 
       <Field
         label="Driving license number"
