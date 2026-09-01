@@ -43,7 +43,7 @@ const COLORS = {
   white: '#ffffff',
 };
 //API 
-const PHONE_NUMBER = '+15551234567';
+const PHONE_NUMBER = '+91 7439548661';
 const PLAN_CARD_WIDTH = 260;
 const PLAN_CARD_GAP = 20;
 
@@ -219,7 +219,17 @@ function FormField({
     </View>
   );
 }
-function PlanCard({ plan, expanded, onToggle }: { plan: Plan; expanded: boolean; onToggle: () => void }) {
+function PlanCard({
+  plan,
+  expanded,
+  onToggle,
+  cardWidth,
+}: {
+  plan: Plan;
+  expanded: boolean;
+  onToggle: () => void;
+  cardWidth?: number;
+}) {
   const [hovered, setHovered] = useState(false);
   const scale = useRef(new Animated.Value(1)).current;
 
@@ -232,8 +242,19 @@ function PlanCard({ plan, expanded, onToggle }: { plan: Plan; expanded: boolean;
   }, [hovered]);
 
   return (
-    <Pressable onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)} style={styles.planCardOuter}>
-      <Animated.View style={[styles.planCard, plan.highlighted && styles.planCardHighlighted, { transform: [{ scale }] }]}>
+    <Pressable
+      onHoverIn={() => setHovered(true)}
+      onHoverOut={() => setHovered(false)}
+      style={[styles.planCardOuter, cardWidth ? { width: cardWidth } : null]}
+    >
+      <Animated.View
+        style={[
+          styles.planCard,
+          cardWidth ? { width: cardWidth } : null,
+          plan.highlighted && styles.planCardHighlighted,
+          { transform: [{ scale }] },
+        ]}
+      >
         {plan.highlighted && (
   <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.8 }}>
   <CardBgSvg
@@ -327,7 +348,6 @@ function PlanCard({ plan, expanded, onToggle }: { plan: Plan; expanded: boolean;
 export default function RouteShareLanding() {
   const { width } = useWindowDimensions();
   const isWide = width >= 900;
-  const heroStyles = isWide ? styles : mobileStyles;
   const scrollRef = useRef<ScrollView>(null);
   const sectionY = useRef<{ [key: string]: number }>({});
   const [heroSize, setHeroSize] = useState({ width: 0, height: 0 });
@@ -433,11 +453,18 @@ const handleToastHide = () => {
   };
   const plansScrollRef = useRef<ScrollView>(null);
 const [plansScrollX, setPlansScrollX] = useState(0);
-const plansMaxScrollX =
-  Math.max(0, PLANS.length * (PLAN_CARD_WIDTH + PLAN_CARD_GAP) - PLAN_CARD_GAP - 600);
+const SECTION_H_PADDING = 24; // matches styles.section paddingHorizontal
+const mobileCardWidth = Math.min(340, width - SECTION_H_PADDING * 2);
+const activeCardWidth = isWide ? PLAN_CARD_WIDTH : mobileCardWidth;
+const plansMaxScrollX = isWide
+  ? Math.max(0, PLANS.length * (PLAN_CARD_WIDTH + PLAN_CARD_GAP) - PLAN_CARD_GAP - 600)
+  : Math.max(
+      0,
+      PLANS.length * (mobileCardWidth + PLAN_CARD_GAP) - PLAN_CARD_GAP - mobileCardWidth
+    );
 
 const scrollPlans = (direction: 1 | -1) => {
-  const step = PLAN_CARD_WIDTH + PLAN_CARD_GAP;
+  const step = activeCardWidth + PLAN_CARD_GAP;
   const nextX = Math.min(Math.max(0, plansScrollX + direction * step), plansMaxScrollX);
   plansScrollRef.current?.scrollTo({ x: nextX, animated: true });
   setPlansScrollX(nextX);
@@ -463,13 +490,16 @@ const scrollPlans = (direction: 1 | -1) => {
                 position: 'absolute',
                 top: 0,
                 left: 0,
-                width: 2000,
+                width: heroSize.width,
                 height: heroSize.height,
+                zIndex:0
               }}
               resizeMode={ResizeMode.COVER}
               isLooping
               shouldPlay
               isMuted
+              volume={0}
+              useNativeControls={false}
               pointerEvents="none"
             />
           )}
@@ -519,32 +549,47 @@ const scrollPlans = (direction: 1 | -1) => {
           </View>
 
           <WaveDivider />
-           <Image
-            source={HERO_TAXI_IMG}
-            style={[
-              styles.heroImage,
-              { aspectRatio: HERO_TAXI_ASPECT_RATIO },
-              heroStyles.heroImage,
-            ]}
-            resizeMode="contain"
-            pointerEvents="none"
-          />
+          {isWide ? (
+            <Image
+              source={HERO_TAXI_IMG}
+              style={[
+                styles.heroImage,
+                { aspectRatio: HERO_TAXI_ASPECT_RATIO },
+                styles.heroImageWide,
+              ]}
+              resizeMode="contain"
+              pointerEvents="none"
+            />
+          ) : (
+            <View style={mobileStyles.heroImageWrap} pointerEvents="none">
+              <Image
+                source={HERO_TAXI_IMG}
+                style={mobileStyles.heroImage}
+                resizeMode="contain"
+              />
+            </View>
+          )}
           
         </View>
         {/* -------------------------------------------------------------- */}
 {/* SUBSCRIPTIONS                                                 */}
 {/* -------------------------------------------------------------- */}
 <View
-  style={[styles.section, isWide && { paddingRight: 260 }]}
+  style={[
+    styles.section,
+    isWide ? { paddingRight: 260 } : mobileStyles.subscriptionsSection,
+  ]}
   onLayout={registerSection('subscriptions')}
 >
   <Text style={styles.sectionTitle}>Our Subscriptions</Text>
   <Text style={styles.sectionCaret}>▾</Text>
 
-  <View style={styles.carouselWrap}>
-    <Pressable onPress={() => scrollPlans(-1)} style={styles.carouselArrow}>
-      <Text style={styles.carouselArrowText}>‹</Text>
-    </Pressable>
+  <View style={[styles.carouselWrap, !isWide && mobileStyles.carouselWrap]}>
+    {isWide && (
+      <Pressable onPress={() => scrollPlans(-1)} style={styles.carouselArrow}>
+        <Text style={styles.carouselArrowText}>‹</Text>
+      </Pressable>
+    )}
     <ScrollView
       ref={plansScrollRef}
       horizontal
@@ -552,7 +597,13 @@ const scrollPlans = (direction: 1 | -1) => {
       onScroll={(e) => setPlansScrollX(e.nativeEvent.contentOffset.x)}
       scrollEventThrottle={16}
       style={styles.carouselScroll}
-      contentContainerStyle={styles.plansRow}
+      contentContainerStyle={[
+        styles.plansRow,
+        !isWide && { paddingHorizontal: 0 },
+      ]}
+      snapToInterval={!isWide ? mobileCardWidth + PLAN_CARD_GAP : undefined}
+      decelerationRate={!isWide ? 'fast' : 'normal'}
+      snapToAlignment="start"
     >
       {PLANS.map((plan) => (
         <PlanCard
@@ -560,12 +611,15 @@ const scrollPlans = (direction: 1 | -1) => {
           plan={plan}
           expanded={expandedPlan === plan.id}
           onToggle={() => setExpandedPlan(expandedPlan === plan.id ? null : plan.id)}
+          cardWidth={!isWide ? mobileCardWidth : undefined}
         />
       ))}
     </ScrollView>
-    <Pressable onPress={() => scrollPlans(1)} style={styles.carouselArrow}>
-      <Text style={styles.carouselArrowText}>›</Text>
-    </Pressable>
+    {isWide && (
+      <Pressable onPress={() => scrollPlans(1)} style={styles.carouselArrow}>
+        <Text style={styles.carouselArrowText}>›</Text>
+      </Pressable>
+    )}
   </View>
 </View>
         
@@ -872,12 +926,28 @@ return (
 // Styles
 // ---------------------------------------------------------------------------
 const mobileStyles = StyleSheet.create({
-  heroImage: {
+  heroImageWrap: {
     position: 'absolute',
     right: -10,
-    top: 40,
-    width: 280,
+    top: 200,
+    width: 180,
+    height: 210,
+    overflow: 'hidden',
     zIndex: 3,
+  },
+  heroImage: {
+    width: '100%',
+    height: '100%',
+  },
+  subscriptionsSection: {
+    marginTop: 16,
+    paddingTop: 24,
+  },
+  carouselWrap: {
+    width: '100%',
+    maxWidth: '100%',
+    alignSelf: 'center',
+    gap: 0,
   },
 });
 
@@ -904,6 +974,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    zIndex:2
   },
   navRowWide: {},
   logo: {
@@ -990,6 +1061,7 @@ carouselWrap: {
   planCardHighlighted: { backgroundColor: COLORS.coral },
   heroBody: {
     marginTop: 20,
+    zIndex: 2,
   },
  heroBodyWide: {
   flexDirection: 'row',
@@ -1013,6 +1085,7 @@ carouselWrap: {
     flexDirection: 'row',
     gap: 14,
     marginBottom: 70,
+    zIndex: 2
   },
       heroImage: {
     position: 'absolute',
