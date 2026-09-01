@@ -15,6 +15,7 @@ import {
   Animated,
 } from 'react-native';
 import Signup from './Signup';
+import Login from './Login';
 import DriverDetails from './Driver';
 import Svg, { Path } from 'react-native-svg';
 import CardBgSvg from '../../assets/images/cardPhoto1.svg';
@@ -611,45 +612,15 @@ const scrollPlans = (direction: 1 | -1) => {
               <Text style={styles.modalCloseText}>✕</Text>
             </Pressable>
             {modal === 'login' && (
-  <>
-    <Text style={styles.modalTitle}>Log in</Text>
-    <FormField
-      label="Email"
-      value={loginEmail}
-      onChangeText={setLoginEmail}
-      placeholder="you@example.com"
-    />
-    <FormField
-      label="Password"
-      value={loginPass}
-      onChangeText={setLoginPass}
-      placeholder="••••••••"
-      secure
-    />
-    {!!loginMsg && <Text style={styles.modalMsg}>{loginMsg}</Text>}
-    <PillButton
-      label="Log in"
-      onPress={() => {
-        submitLogin();
-        setModal('booking'); // proceed straight to booking after login
-      }}
-    />
-    <Pressable onPress={() => setModal('signup')} style={{ marginTop: 16, alignItems: 'center' }}>
-      <Text style={{ color: COLORS.textMuted, fontSize: 13 }}>
-        New here? <Text style={{ color: COLORS.coral, fontWeight: '700' }}>Sign up</Text>
-      </Text>
-    </Pressable>
-  </>
-)}
-{modal === 'signup' && !showDriverDetails && (
-  <Signup
-    onSubmit={(data) => {
-      console.log('signup data', data);
-      if (data.designation === 'driver') {
-        setShowDriverDetails(true);
-      } else {
-        // rider flow done — close modal, redirect, etc.
-      }
+  <Login
+    onLogin={(data) => {
+      console.log('login data', data);
+      // call your auth API here with data.username / data.password / data.designation
+      setModal('booking'); // proceed straight to booking after login
+    }}
+    onPasswordReset={(data) => {
+      console.log('password reset', data);
+      // call your password-reset API here
     }}
   />
 )}

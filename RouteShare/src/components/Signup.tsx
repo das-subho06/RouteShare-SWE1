@@ -24,6 +24,7 @@ const COLORS = {
 };
 
 type Designation = 'user' | 'driver';
+type Gender = 'male' | 'female' | 'other';
 
 interface SignupProps {
   onSubmit?: (data: {
@@ -33,6 +34,9 @@ interface SignupProps {
     phone: string;
     aadhar: string;
     designation: Designation;
+    username?: string;
+    gender?: Gender;
+    dob?: string;
   }) => void;
 }
 
@@ -71,6 +75,19 @@ function Field({
   );
 }
 
+const GENDER_OPTIONS: { id: Gender; label: string }[] = [
+  { id: 'male', label: 'Male' },
+  { id: 'female', label: 'Female' },
+  { id: 'other', label: 'Other' },
+];
+
+// Formats raw digits into DD/MM/YYYY as the person types
+function formatDob(raw: string) {
+  const digits = raw.replace(/[^0-9]/g, '').slice(0, 8);
+  const parts = [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4, 8)].filter(Boolean);
+  return parts.join('/');
+}
+
 export default function Signup({ onSubmit }: SignupProps) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -79,11 +96,18 @@ export default function Signup({ onSubmit }: SignupProps) {
   const [aadhar, setAadhar] = useState('');
   const [designation, setDesignation] = useState<Designation>('user');
 
+  // Rider-only fields
+  const [username, setUsername] = useState('');
+  const [gender, setGender] = useState<Gender | ''>('');
+  const [dob, setDob] = useState('');
+
   const [otp, setOtp] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otpVerified, setOtpVerified] = useState(false);
   const [message, setMessage] = useState('');
   const [submitted, setSubmitted] = useState(false);
+
+  const isRider = designation === 'user';
 
   const sendCode = () => {
     if (phone.length < 10) {
@@ -122,8 +146,30 @@ export default function Signup({ onSubmit }: SignupProps) {
       setMessage('Please verify your phone number first.');
       return;
     }
+    if (isRider) {
+      if (!username) {
+        setMessage('Choose a username.');
+        return;
+      }
+      if (!gender) {
+        setMessage('Select your gender.');
+        return;
+      }
+      if (dob.length !== 10) {
+        setMessage('Enter your date of birth as DD/MM/YYYY.');
+        return;
+      }
+    }
 
-    onSubmit?.({ name, email, password, phone, aadhar, designation });
+    onSubmit?.({
+      name,
+      email,
+      password,
+      phone,
+      aadhar,
+      designation,
+      ...(isRider ? { username, gender: gender as Gender, dob } : {}),
+    });
     setSubmitted(true);
     setMessage('');
   };
@@ -168,6 +214,51 @@ export default function Signup({ onSubmit }: SignupProps) {
       </View>
 
       <Field label="Full name" value={name} onChangeText={setName} placeholder="Jane Doe" />
+
+      {/* Rider-only fields */}
+      {isRider && (
+        <>
+          <Field
+            label="Username"
+            value={username}
+            onChangeText={setUsername}
+            placeholder="janedoe_23"
+          />
+
+          <Text style={styles.fieldLabel}>Gender</Text>
+          <View style={styles.segmentWrap}>
+            {GENDER_OPTIONS.map((g) => (
+              <Pressable
+                key={g.id}
+                onPress={() => setGender(g.id)}
+                style={[
+                  styles.segmentBtn,
+                  gender === g.id && styles.segmentBtnActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.segmentLabel,
+                    gender === g.id && styles.segmentLabelActive,
+                  ]}
+                >
+                  {g.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          <Field
+            label="Date of birth"
+            value={dob}
+            onChangeText={(t) => setDob(formatDob(t))}
+            placeholder="DD/MM/YYYY"
+            keyboardType="number-pad"
+            maxLength={10}
+          />
+        </>
+      )}
+
       <Field
         label="Email"
         value={email}
