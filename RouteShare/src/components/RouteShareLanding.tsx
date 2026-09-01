@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { Video, ResizeMode } from 'expo-av';
 import {
   View,
   Text,
@@ -324,7 +325,7 @@ export default function RouteShareLanding() {
   const heroStyles = isWide ? styles : mobileStyles;
   const scrollRef = useRef<ScrollView>(null);
   const sectionY = useRef<{ [key: string]: number }>({});
-
+  const [heroSize, setHeroSize] = useState({ width: 0, height: 0 });
   const [expandedPlan, setExpandedPlan] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalKind>(null);
 
@@ -426,8 +427,30 @@ const scrollPlans = (direction: 1 | -1) => {
         {/* -------------------------------------------------------------- */}
         <View
           style={styles.hero}
-          onLayout={registerSection('home')}
+          onLayout={(e) => {
+            registerSection('home')(e);
+            const { width, height } = e.nativeEvent.layout;
+            setHeroSize({ width, height });
+          }}
         >
+           {heroSize.width > 0 && (
+            <Video
+              source={require('../../assets/videos/hero-bg.mp4')}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: 2000,
+                height: heroSize.height,
+              }}
+              resizeMode={ResizeMode.COVER}
+              isLooping
+              shouldPlay
+              isMuted
+              pointerEvents="none"
+            />
+          )}
+
           {/* Nav */}
           <View style={[styles.navRow, isWide && styles.navRowWide]}>
             <Text style={styles.logo}>
@@ -926,10 +949,11 @@ carouselWrap: {
  heroBodyWide: {
   flexDirection: 'row',
   alignItems: 'center',
-  justifyContent: 'space-between',
+  justifyContent: 'flex-end',
   maxWidth: 1100,
   width: '100%',
   alignSelf: 'center',
+  marginRight: 520,
 },
   heroText: { maxWidth: 480 },
   heroHeadline: {
@@ -943,7 +967,7 @@ carouselWrap: {
   heroButtons: {
     flexDirection: 'row',
     gap: 14,
-    marginBottom: 40,
+    marginBottom: 70,
   },
       heroImage: {
     position: 'absolute',
