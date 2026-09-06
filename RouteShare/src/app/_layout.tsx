@@ -15,6 +15,7 @@ export default function RootLayout() {
           <Stack.Screen name="index" />
           <Stack.Screen name="rider" />
           <Stack.Screen name="driverDashboard" />
+          <Stack.Screen name="confirmPage" />
         </Stack></SafeAreaProvider>
       </ThemeProvider>
     

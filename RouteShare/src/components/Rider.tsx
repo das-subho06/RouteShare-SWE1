@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState,useEffect, useRef } from "react";
+import { useFocusEffect } from "@react-navigation/native"; 
 import { TextInput } from "react-native";
 import {
   View,
@@ -16,9 +17,13 @@ import {
 } from "react-native";
 import { Ionicons, MaterialIcons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Location from "expo-location";
-import { useLocalSearchParams } from "expo-router";
-
-
+import {Sidebar} from "./Sidebar";
+import { router, useLocalSearchParams } from "expo-router";
+import ChooseRide, { RideOption } from "./ChooseRide";
+import RideToast from "./RideToast";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { API_URL } from "./config";
+import { getSocket } from "./lib/socket";
 /* ------------------------------------------------------------------ */
 /*  Theme                                                               */
 /* ------------------------------------------------------------------ */
@@ -81,130 +86,7 @@ type Place = { label: string; sublabel: string; latitude: number; longitude: num
 /*  Sidebar (reusable — mount it any number of times)                  */
 /* ------------------------------------------------------------------ */
 
-export type SidebarNavItem = { key: string; label: string; icon: keyof typeof Ionicons.glyphMap };
-export type SidebarUser = { name: string; initials?: string; profileLabel?: string };
 
-export type SidebarProps = {
-  brandName?: string;
-  items?: SidebarNavItem[];
-  activeKey?: string;
-  onSelectItem?: (key: string) => void;
-  showPromo?: boolean;
-  onPromoPress?: () => void;
-  user?: SidebarUser;
-  onUserPress?: () => void;
-  width?: number;
-};
-
-const DEFAULT_NAV_ITEMS: SidebarNavItem[] = [
-  { key: "ride", label: "Ride", icon: "car" },
-  { key: "activity", label: "Previous activity", icon: "time-outline" },
-  { key: "chat", label: "Chat", icon: "chatbubble-ellipses-outline" },
-];
-
-export function Sidebar({
-  brandName = "routeshare",
-  items = DEFAULT_NAV_ITEMS,
-  activeKey,
-  onSelectItem,
-  showPromo = true,
-  onPromoPress,
-  user = { name: "Rider", profileLabel: "View profile" },
-  onUserPress,
-  width = 248,
-}: SidebarProps) {
-  const [internalActive, setInternalActive] = useState(items[0]?.key);
-  const currentActive = activeKey ?? internalActive;
-
-  const handleSelect = (key: string) => {
-    if (onSelectItem) onSelectItem(key);
-    else setInternalActive(key);
-  };
-
-  return (
-    <View style={[sidebarStyles.container, { width }]}>
-      <View style={sidebarStyles.brandRow}>
-        <Text style={sidebarStyles.brandText}>{brandName}</Text>
-        <Ionicons name="car-sport" size={18} color={colors.brand} style={{ marginLeft: 6 }} />
-      </View>
-
-      <ScrollView style={{ flexGrow: 0 }} showsVerticalScrollIndicator={false}>
-        {items.map((item) => {
-          const isActive = item.key === currentActive;
-          return (
-            <TouchableOpacity
-              key={item.key}
-              activeOpacity={0.75}
-              onPress={() => handleSelect(item.key)}
-              style={[sidebarStyles.navItem, isActive && sidebarStyles.navItemActive]}
-            >
-              <Ionicons name={item.icon} size={18} color={isActive ? colors.brand : "#C7C9D1"} style={{ width: 22 }} />
-              <Text style={[sidebarStyles.navLabel, isActive && sidebarStyles.navLabelActive]}>{item.label}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      <View style={{ flex: 1 }} />
-
-      {showPromo && (
-        <TouchableOpacity style={sidebarStyles.promoCard} activeOpacity={0.85} onPress={onPromoPress}>
-          <View style={sidebarStyles.promoIconRow}>
-            <MaterialCommunityIcons name="leaf" size={18} color="#3a3d46" />
-            <MaterialCommunityIcons name="car-sports" size={30} color={colors.brand} style={{ marginHorizontal: 6 }} />
-            <Ionicons name="location" size={18} color={colors.brand} />
-          </View>
-          <Text style={sidebarStyles.promoTitle}>Share your ride,</Text>
-          <Text style={sidebarStyles.promoTitleAccent}>save more</Text>
-          <Text style={sidebarStyles.promoBody}>Carpool and split fares with fellow riders.</Text>
-        </TouchableOpacity>
-      )}
-
-      <TouchableOpacity style={sidebarStyles.userRow} activeOpacity={0.7} onPress={onUserPress}>
-        <View style={sidebarStyles.avatar}>
-          <Text style={sidebarStyles.avatarText}>{(user.initials ?? user.name[0] ?? "?").toUpperCase()}</Text>
-        </View>
-        <View>
-          <Text style={sidebarStyles.userName}>{user.name}</Text>
-          {!!user.profileLabel && <Text style={sidebarStyles.userSub}>{user.profileLabel}</Text>}
-        </View>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-const sidebarStyles = StyleSheet.create({
-  container: {
-    backgroundColor: colors.sidebarBg,
-    paddingTop: spacing.xl,
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
-    height: "100%",
-  },
-  brandRow: { flexDirection: "row", alignItems: "center", marginBottom: spacing.xl, paddingHorizontal: spacing.xs },
-  brandText: { color: colors.brand, fontSize: 19, fontWeight: "800" },
-  navItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.md,
-    marginBottom: spacing.xs,
-  },
-  navItemActive: { backgroundColor: colors.sidebarActiveBg },
-  navLabel: { color: "#B7B9C2", fontSize: 14.5, fontWeight: "500", marginLeft: spacing.sm },
-  navLabelActive: { color: colors.white, fontWeight: "700" },
-  promoCard: { backgroundColor: "#20222A", borderRadius: radius.lg, padding: spacing.lg, marginBottom: spacing.lg },
-  promoIconRow: { flexDirection: "row", alignItems: "center", marginBottom: spacing.md },
-  promoTitle: { color: colors.white, fontSize: 15, fontWeight: "700" },
-  promoTitleAccent: { color: colors.brand, fontSize: 15, fontWeight: "700", marginBottom: 6 },
-  promoBody: { color: "#9A9CA6", fontSize: 12.5, lineHeight: 17 },
-  userRow: { flexDirection: "row", alignItems: "center", paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: "#2A2D36" },
-  avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.white, alignItems: "center", justifyContent: "center", marginRight: spacing.sm },
-  avatarText: { fontWeight: "700", color: colors.text },
-  userName: { color: colors.white, fontWeight: "600", fontSize: 13.5 },
-  userSub: { color: colors.brand, fontSize: 12 },
-});
 
 /* ------------------------------------------------------------------ */
 /*  Generic modal wrapper                                               */
@@ -485,7 +367,7 @@ function RiderCountModal({
 }) {
   return (
     <SheetModal visible={visible} title="Riders" onClose={onClose} width={260}>
-      {[1, 2, 3, 4].map((n) => {
+      {[1, 2, 3, 4,5,6].map((n) => {
         const active = n === count;
         return (
           <TouchableOpacity
@@ -558,6 +440,9 @@ function PaymentModal({
 /* ------------------------------------------------------------------ */
 
 const OPTION_LIST = [
+  { key: "female_driver", label: "Female driver"},
+  {key: "shared_ride", label: "Shared ride"},
+  { key: "no_shared_ride", label: "No shared ride" },
   { key: "ac", label: "AC required" },
   { key: "pet", label: "Pet friendly" },
   { key: "quiet", label: "Quiet ride" },
@@ -1037,47 +922,6 @@ function useCurrentLocation() {
 
   return { getCurrentLocation, loading };
 }
-function SaveLocationRow({ onSave, onDismiss }: { onSave: (cat: "home" | "work" | "other" | "favorite") => void; onDismiss: () => void }) {
-  const options: { key: "home" | "work" | "other" | "favorite"; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
-    { key: "home", label: "Home", icon: "home-outline" },
-    { key: "work", label: "Work", icon: "briefcase-outline" },
-    { key: "other", label: "Other", icon: "location-outline" },
-    { key: "favorite", label: "Favorite", icon: "star-outline" },
-  ];
-  return (
-    <View style={saveRowStyles.container}>
-      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-        <Text style={saveRowStyles.label}>Save this pickup as</Text>
-        <TouchableOpacity onPress={onDismiss}>
-          <Ionicons name="close" size={14} color={colors.textMuted} />
-        </TouchableOpacity>
-      </View>
-      <View style={saveRowStyles.row}>
-        {options.map((o) => (
-          <TouchableOpacity key={o.key} style={saveRowStyles.chip} onPress={() => onSave(o.key)}>
-            <Ionicons name={o.icon} size={13} color={colors.text} />
-            <Text style={saveRowStyles.chipText}>{o.label}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-const saveRowStyles = StyleSheet.create({
-  container: { marginTop: -8, marginBottom: spacing.lg, padding: spacing.sm, backgroundColor: "#FAFAFB", borderRadius: radius.md },
-  label: { fontSize: 11.5, color: colors.textMuted, marginBottom: 6 },
-  row: { flexDirection: "row", gap: 6, flexWrap: "wrap" },
-  chip: { flexDirection: "row", alignItems: "center", gap: 4, borderWidth: 1, borderColor: colors.border, borderRadius: radius.pill, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: colors.white },
-  chipText: { fontSize: 11.5, fontWeight: "600", color: colors.text },
-});
-/* ------------------------------------------------------------------ */
-/*  Screen                                                              */
-/* ------------------------------------------------------------------ */
-
-// Blank label so the pickup field shows its placeholder instead of a preset address.
-// Coordinates are central Kolkata (Esplanade/Maidan area) so the map opens centered on the city
-// rather than one specific neighbourhood, until the rider searches or uses their current location.
 const KOLKATA_CENTER: Place = { label: "", sublabel: "", latitude: 22.5677, longitude: 88.3572 };
 
 const WORK_PLACE: Place = { label: "Ecospace Business Park", sublabel: "New Town, Kolkata, West Bengal", latitude: 22.5771, longitude: 88.4297 };
@@ -1086,7 +930,7 @@ export default function Rider() {
   const { width } = useWindowDimensions();
   const isWide = width >= 980;
   const [sidebarOpen, setSidebarOpen] = useState(false);
-
+  const [autoSearchAfterCancel, setAutoSearchAfterCancel] = useState(false);
   // Signup navigates here with `params: { name, username }` after a rider signs up.
   const { name: nameParam } = useLocalSearchParams<{ name?: string | string[]; username?: string | string[] }>();
   const riderName = (Array.isArray(nameParam) ? nameParam[0] : nameParam)?.trim() || "Rider";
@@ -1108,7 +952,9 @@ export default function Rider() {
   const [riderModal, setRiderModal] = useState(false);
   const [paymentModal, setPaymentModal] = useState(false);
   const [optionsModal, setOptionsModal] = useState(false);
-
+  const [chooseRideVisible, setChooseRideVisible] = useState(false);
+  const [confirmedRide, setConfirmedRide] = useState<RideOption | null>(null);
+  const skipNextFocusResetRef = useRef(false); // used to skip the useFocusEffect reset when returning from confirmPage
   const { getCurrentLocation, loading: locLoading } = useCurrentLocation();
 
   const distanceKm = 12.6;
@@ -1123,7 +969,100 @@ const [showSavePrompt, setShowSavePrompt] = useState(false);
 const [savedPlaces, setSavedPlaces] = useState<{
   home?: Place; work?: Place; other: Place[]; favorite: Place[];
 }>({ other: [], favorite: [] });
+useEffect(() => {
+  (async () => {
+    try {
+      const userId = await AsyncStorage.getItem("userId");
+      if (!userId) return;
 
+      const res = await fetch(`${API_URL}/rides/active/${userId}`);
+      if (!res.ok) return; // 404 = no active ride, nothing to restore
+      const ride = await res.json();
+
+      let driver: any = {};
+      if (ride.driver_id) {
+        try {
+          const driverRes = await fetch(`${API_URL}/driver/driver-details/${ride.driver_id}`);
+          if (driverRes.ok) driver = await driverRes.json();
+        } catch {
+          // driver profile fetch failing shouldn't block restoring the ride toast
+        }
+      }
+
+      await AsyncStorage.setItem(
+        "activeRideSummary",
+        JSON.stringify({
+          rideId: String(ride.id),
+          rideName: ride.ride_class,
+          price: String(ride.price),
+          pickup: ride.pickup_label,
+          destination: ride.destination_label,
+          distanceKm: String(ride.distance_km),
+          durationMinutes: String(ride.duration_minutes),
+          pickupLat: String(ride.pickup_lat),
+          pickupLng: String(ride.pickup_lng),
+          destLat: String(ride.destination_lat),
+          destLng: String(ride.destination_lng),
+          seats: String(ride.seats_requested),
+          driverName: driver.name ?? "",
+          vehicleModel: driver.vehicle_model ?? "",
+          vehicleNumber: driver.vehicle_number ?? "",
+          driverSeats: String(driver.seats ?? ""),
+          rideCode: ride.ride_code,
+        })
+      );
+    } catch (err) {
+      console.error("Failed to restore active ride", err);
+    }
+  })();
+}, []);
+useEffect(() => {
+  (async () => {
+    const userId = await AsyncStorage.getItem("userId");
+    if (!userId) return;
+    const socket = getSocket();
+    const join = () => socket.emit("rider_online", { riderId: userId });
+    if (socket.connected) join();
+    else socket.once("connect", join);
+  })();
+}, []);
+useEffect(() => {
+  const socket = getSocket();
+  const handleRideCancelled = () => {
+    skipNextFocusResetRef.current = true;
+    setConfirmedRide(null);
+    setAutoSearchAfterCancel(true);
+    setChooseRideVisible(true);
+    Alert.alert(
+      "Driver cancelled",
+      "Your driver cancelled the ride. We're searching for another driver for the same trip."
+    );
+  };
+  socket.on("ride_cancelled", handleRideCancelled);
+  return () => {
+    socket.off("ride_cancelled", handleRideCancelled);
+  };
+}, []);
+useFocusEffect(
+  useCallback(() => {
+    if (skipNextFocusResetRef.current) {
+      skipNextFocusResetRef.current = false;
+      return;
+    }
+    // Every time this screen regains focus — including returning from
+    // confirmPage after a completed/cancelled ride — start the request
+    // form fresh instead of showing the last trip's details.
+    setPickup(KOLKATA_CENTER);
+    setDestination(null);
+    setRiderCount(1);
+    setPaymentMethod("cash");
+    setRideOptions([]);
+    setConfirmedRide(null);
+    setChooseRideVisible(false);
+    setAutoSearchAfterCancel(false);
+    setActiveField(null);
+  }, [])
+);
 const handleSelectSuggestion = (field: "pickup" | "destination", place: PlaceSuggestion) => {
   if (field === "pickup") {
     setPickup(place);
@@ -1169,7 +1108,16 @@ const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
     setFavorites((prev) => (prev.find((f) => f.label === destination.label) ? prev : [...prev, destination]));
     Alert.alert("Saved", `${destination.label} added to your favorites.`);
   };
-
+  const handleSidebarSelect = (key: string) => {
+  if (key === "activity") {
+    router.push({
+      pathname: "/previousActivity",   // adjust if your file/route is registered under a different path
+      params: { name: riderName, username: riderName },
+    });
+  }
+  // "ride" is this screen — nothing to do.
+  // "chat" has no standalone screen yet.
+};
   const handleSeePrices = () => {
     if (!pickup.label) {
       Alert.alert("Add a pickup location", "Please enter your pickup location, or use your current location.");
@@ -1179,10 +1127,14 @@ const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
       Alert.alert("Add a destination", "Please choose where you're headed first.");
       return;
     }
-    Alert.alert(
-      "Fare estimate",
-      `${pickup.label} → ${destination.label}\n${distanceKm} km · ${durationMinutes} min\n\nEconomy: ₹${Math.round(distanceKm * 14)}\nPremium: ₹${Math.round(distanceKm * 22)}`
-    );
+    setAutoSearchAfterCancel(false); 
+    setChooseRideVisible(true);
+  };
+
+  const handleConfirmRide = (ride: RideOption, price: number) => {
+    setConfirmedRide(ride);
+    setChooseRideVisible(false);
+    Alert.alert("Ride requested", `${ride.name} is on the way\n${pickup.label} → ${destination?.label}\n₹${price}`);
   };
 
   const scheduleLabel =
@@ -1193,13 +1145,19 @@ const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
   return (
     <View style={screenStyles.root}>
       {isWide ? (
-        <Sidebar user={{ name: riderName, profileLabel: "View profile" }} />
+        <Sidebar 
+        activeKey="ride"
+        onSelectItem={handleSidebarSelect}
+        user={{ name: riderName, profileLabel: "View profile" }} />
       ) : (
         sidebarOpen && (
           <View style={screenStyles.mobileSidebarOverlay}>
             <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setSidebarOpen(false)} />
             <View style={screenStyles.mobileSidebarPanel}>
-              <Sidebar user={{ name: riderName, profileLabel: "View profile" }} />
+              <Sidebar 
+              activeKey="ride"
+          onSelectItem={(key) => { setSidebarOpen(false); handleSidebarSelect(key); }}
+              user={{ name: riderName, profileLabel: "View profile" }} />
             </View>
           </View>
         )
@@ -1229,7 +1187,9 @@ const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
         </View>
 
         <ScrollView contentContainerStyle={[screenStyles.content, isWide && screenStyles.contentWide]} showsVerticalScrollIndicator={false}>
-          <View style={[screenStyles.card, isWide && screenStyles.cardWide]}>
+          <View style={[screenStyles.card, isWide && screenStyles.cardWide,
+            isWide && chooseRideVisible && screenStyles.cardWideCollapsed
+          ]}>
             <Text style={screenStyles.cardTitle}>Request a ride</Text>
 
             <TouchableOpacity style={screenStyles.cityRow} onPress={() => setCityModal(true)}>
@@ -1285,32 +1245,10 @@ const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
   />
 </View>
 
-{showSavePrompt && (
-  <SaveLocationRow onSave={handleSaveCategory} onDismiss={() => setShowSavePrompt(false)} />
-)}
+
             
 
-            <View style={screenStyles.chipsRow}>
-              <TouchableOpacity style={screenStyles.chip} onPress={() => savedPlaces.home && setPickup(savedPlaces.home)}>
-                <Ionicons name="home-outline" size={16} color={colors.text} />
-                <View>
-                  <Text style={screenStyles.chipTitle}>Home</Text>
-                  <Text style={screenStyles.chipSub}>{savedPlaces.home?.label}</Text>
-                </View>
-              </TouchableOpacity>
-              <TouchableOpacity style={screenStyles.chip} onPress={() => savedPlaces.work && setDestination(savedPlaces.work)}>
-                <Ionicons name="briefcase-outline" size={16} color={colors.text} />
-                <View>
-                  <Text style={screenStyles.chipTitle}>Work</Text>
-                  <Text style={screenStyles.chipSub}>{savedPlaces.work?.label}</Text>
-                </View>
-              </TouchableOpacity>
-              <TouchableOpacity style={screenStyles.chip} onPress={handleAddFavorite}>
-                <Ionicons name="star-outline" size={16} color={colors.text} />
-                <Text style={screenStyles.chipTitle}>Add favorite</Text>
-              </TouchableOpacity>
-            </View>
-
+            
             <View style={screenStyles.optionsRow}>
               <TouchableOpacity style={screenStyles.optionBtn} onPress={() => setRiderModal(true)}>
                 <Ionicons name="person-outline" size={16} color={colors.text} />
@@ -1337,7 +1275,34 @@ const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
             </TouchableOpacity>
           </View>
 
-          <View style={[screenStyles.mapWrap, isWide && screenStyles.mapWrapWide]}>
+          {chooseRideVisible && (
+            <View style={[screenStyles.chooseRideWrap, isWide && screenStyles.chooseRideWrapWide]}>
+              <ChooseRide
+  pickupLabel={pickup.label}
+  destinationLabel={destination?.label ?? ""}
+  pickupCoords={{ latitude: pickup.latitude, longitude: pickup.longitude }}
+  destinationCoords={{ latitude: destination?.latitude ?? 0, longitude: destination?.longitude ?? 0 }}
+  distanceKm={distanceKm}
+  durationMinutes={durationMinutes}
+  riderCount={riderCount}
+  paymentMethod={paymentMethod}
+  rideOptions={rideOptions}
+  autoSearch={autoSearchAfterCancel}   // NEW
+  initialSelectedId={confirmedRide?.id}
+  onClose={() => setChooseRideVisible(false)}
+  onConfirm={handleConfirmRide}
+/>
+            </View>
+          )}
+
+          <View
+            style={[
+              screenStyles.mapWrap,
+              isWide && screenStyles.mapWrapWide,
+              chooseRideVisible && isWide && screenStyles.mapWrapWideCollapsed,
+              chooseRideVisible && !isWide && screenStyles.mapWrapCollapsed,
+            ]}
+          >
             <RouteMap
               pickup={pickup}
               destination={destination}
@@ -1360,6 +1325,8 @@ const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
         onClose={() => setOptionsModal(false)}
         onToggle={(key) => setRideOptions((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))}
       />
+
+      <RideToast />
     </View>
   );
 }
@@ -1381,6 +1348,7 @@ const screenStyles = StyleSheet.create({
 
   card: { backgroundColor: colors.white, borderRadius: radius.xl, padding: spacing.xl, borderWidth: 1, borderColor: colors.border },
   cardWide: { width: 460 },
+  cardWideCollapsed: { width: 360 },
   cardTitle: { fontSize: 19, fontWeight: "800", color: colors.text, marginBottom: spacing.lg },
 
   cityRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: spacing.lg },
@@ -1403,7 +1371,7 @@ const screenStyles = StyleSheet.create({
   locationPlaceholder: { fontSize: 14, color: colors.textFaint, marginTop: 2 },
 
   chipsRow: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg, flexWrap: "wrap" },
-  chip: { flexDirection: "row", alignItems: "center", gap: 8, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingVertical: 10, paddingHorizontal: spacing.sm, flexGrow: 1 },
+  chip: { flexDirection: "row", alignItems: "center", gap: 8, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingVertical: 10, paddingHorizontal: spacing.sm, flexGrow: 1, flexBasis: 0, maxWidth: "48%" },
   chipTitle: { fontSize: 12.5, fontWeight: "700", color: colors.text },
   chipSub: { fontSize: 10.5, color: colors.textMuted },
 
@@ -1414,6 +1382,11 @@ const screenStyles = StyleSheet.create({
   seePricesBtn: { backgroundColor: colors.brand, borderRadius: radius.md, paddingVertical: 15, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   seePricesText: { color: "#fff", fontWeight: "700", fontSize: 15 },
 
+  chooseRideWrap: { width: "100%" },
+  chooseRideWrapWide: { width: 400 },
+
   mapWrap: { height: 380, borderRadius: radius.xl, overflow: "hidden", borderWidth: 1, borderColor: colors.border },
   mapWrapWide: { flex: 1, height: 620 },
+  mapWrapWideCollapsed: { flex: undefined, width:420},
+  mapWrapCollapsed: { height: 220 },
 });

@@ -64,7 +64,7 @@ router.post('/login', async (req, res) => {
       `SELECT u.*, r.username AS rider_username
        FROM users u
        LEFT JOIN rider_profiles r ON r.user_id = u.id
-       WHERE r.username = $1 OR u.email = $1`,
+       WHERE r.username = $1 OR u.email = $1 OR u.name = $1`,
       [username]
     );
     const user = result.rows[0];
@@ -104,6 +104,8 @@ router.post('/login', async (req, res) => {
     res.json({
       token,
       userId: user.id,
+      name: user.name,
+      // username: user.rider_username || username,
       designation: user.designation,
       // frontend uses this to decide ride.tsx vs driverDashboard.tsx
       redirectTo: user.designation === 'driver' ? '/driverDashboard' : '/rider',

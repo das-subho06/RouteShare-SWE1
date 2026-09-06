@@ -505,7 +505,8 @@ const scrollPlans = (direction: 1 | -1) => {
           )}
 
           {/* Nav */}
-          <View style={[styles.navRow, isWide && styles.navRowWide]}>
+          <View style={[styles.navRow, isWide && styles.navRowWide]}
+          renderToHardwareTextureAndroid>
             <Text style={styles.logo}>
               route<Text style={{ color: COLORS.coral }}>share</Text>
             </Text>
@@ -529,7 +530,8 @@ const scrollPlans = (direction: 1 | -1) => {
             </View>
           )}
 
-          <View style={[styles.heroBody, isWide && styles.heroBodyWide]}>
+          <View style={[styles.heroBody, isWide && styles.heroBodyWide]}
+          renderToHardwareTextureAndroid>
             <View style={styles.heroText}>
               <Text style={styles.heroHeadline}>Need a{'\n'}Ride</Text>
               <View style={styles.heroButtons}>

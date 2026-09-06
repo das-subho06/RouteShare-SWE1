@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
   Text,
@@ -9,6 +10,8 @@ import {
 } from 'react-native';
 import { API_URL } from './config';
 import { useRouter } from 'expo-router';
+import DriverDetails from './Driver';
+
 // ---------------------------------------------------------------------------
 // Design tokens — mirrors RouteShareLanding's palette
 // ---------------------------------------------------------------------------
@@ -100,7 +103,8 @@ export default function Signup({ onSubmit, onClose }: SignupProps) {
   const [aadhar, setAadhar] = useState('');
   const [designation, setDesignation] = useState<Designation>('user');
   const [showVerifiedScreen, setShowVerifiedScreen] = useState(false);
-  // Rider-only fields
+  const [showDriverDetails, setShowDriverDetails] = useState(false);
+  const [createdUserId, setCreatedUserId] = useState<number | null>(null); // NEW: Store the user ID
   const [username, setUsername] = useState('');
   const [gender, setGender] = useState<Gender | ''>('');
   const [dob, setDob] = useState('');
@@ -116,51 +120,51 @@ export default function Signup({ onSubmit, onClose }: SignupProps) {
   const isRider = designation === 'user';
 
   const sendCode = async () => {
-  if (phone.length < 10) {
-    setMessage('Enter a valid 10-digit phone number first.');
-    return;
-  }
-  setSending(true);
-  try {
-    const res = await fetch(`${API_URL}/otp/send-otp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone }),
-    });
-    const result = await res.json();
-    if (!res.ok) throw new Error(result.error || 'Could not send code.');
-    setOtpSent(true);
-    setMessage(`Verification code sent to ${phone}.`);
-  } catch (err: any) {
-    setMessage(err.message);
-  } finally {
-    setSending(false);
-  }
-};
+    if (phone.length < 10) {
+      setMessage('Enter a valid 10-digit phone number first.');
+      return;
+    }
+    setSending(true);
+    try {
+      const res = await fetch(`${API_URL}/otp/send-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Could not send code.');
+      setOtpSent(true);
+      setMessage(`Verification code sent to ${phone}.`);
+    } catch (err: any) {
+      setMessage(err.message);
+    } finally {
+      setSending(false);
+    }
+  };
 
   const verifyCode = async () => {
-  if (otp.length !== 6) {
-    setMessage('Enter the 6-digit code sent to your phone.');
-    return;
-  }
-  setVerifying(true);
-  try {
-    const res = await fetch(`${API_URL}/otp/verify-otp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, code: otp }),
-    });
-    const result = await res.json();
-    if (!res.ok || !result.verified) throw new Error(result.error || 'Incorrect code.');
-    setOtpVerified(true);
-    setMessage('Phone number verified.');
-    setShowVerifiedScreen(true);
-  } catch (err: any) {
-    setMessage(err.message);
-  } finally {
-    setVerifying(false);
-  }
-};
+    if (otp.length !== 6) {
+      setMessage('Enter the 6-digit code sent to your phone.');
+      return;
+    }
+    setVerifying(true);
+    try {
+      const res = await fetch(`${API_URL}/otp/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, code: otp }),
+      });
+      const result = await res.json();
+      if (!res.ok || !result.verified) throw new Error(result.error || 'Incorrect code.');
+      setOtpVerified(true);
+      setMessage('Phone number verified.');
+      setShowVerifiedScreen(true);
+    } catch (err: any) {
+      setMessage(err.message);
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   const submit = async () => {
     if (!name || !email || !password) {
@@ -214,7 +218,7 @@ export default function Signup({ onSubmit, onClose }: SignupProps) {
       });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || 'Signup failed.');
-
+      await AsyncStorage.setItem('userId', String(result.userId));
       onSubmit?.(payload);
 
       if (isRider) {
@@ -223,7 +227,10 @@ export default function Signup({ onSubmit, onClose }: SignupProps) {
         router.push({ pathname: '/rider', params: { name, username } });
         return;
       }
-
+      
+      // NEW: Store the userId and show the driver details form
+      setCreatedUserId(result.userId);
+      setShowDriverDetails(true);
       setSubmitted(true);
     } catch (err: any) {
       setMessage(err.message);
@@ -231,33 +238,66 @@ export default function Signup({ onSubmit, onClose }: SignupProps) {
       setSubmitting(false);
     }
   };
-  if (showVerifiedScreen) {
-  return (
-    <View style={styles.wrap}>
-      <Text style={styles.title}>✓ Phone verified!</Text>
-      <Text style={styles.successMsg}>
-        {phone} has been verified successfully. Routing is working — tap continue to finish signing up.
-      </Text>
-      <Pressable
-        onPress={() => setShowVerifiedScreen(false)}
-        style={({ pressed }) => [styles.submitBtn, pressed && { opacity: 0.85 }]}
-      >
-        <Text style={styles.submitLabel}>Continue</Text>
-      </Pressable>
-    </View>
-  );
-}
 
-if (submitted) {
-  return (
-    <View style={styles.wrap}>
-       <Text style={styles.title}>You are all set, {name}!</Text>
-       <Text style={styles.successMsg}>
-         Your {designation} account has been created. A confirmation was sent to {email}.
-      </Text>
-     </View>
-  );
-}
+  if (showVerifiedScreen) {
+    return (
+      <View style={styles.wrap}>
+        <Text style={styles.title}>✓ Phone verified!</Text>
+        <Text style={styles.successMsg}>
+          {phone} has been verified successfully. Routing is working — tap continue to finish signing up.
+        </Text>
+        <Pressable
+          onPress={() => setShowVerifiedScreen(false)}
+          style={({ pressed }) => [styles.submitBtn, pressed && { opacity: 0.85 }]}
+        >
+          <Text style={styles.submitLabel}>Continue</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  // NEW: Updated DriverDetails block
+  if (showDriverDetails) {
+    return (
+      <DriverDetails
+        onSubmit={async (data) => {
+          try {
+            // Save the driver details to the database using the stored userId
+            const res = await fetch(`${API_URL}/driver/driver-details`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                userId: createdUserId,
+                ...data 
+              }),
+            });
+            
+            const result = await res.json();
+            if (!res.ok) throw new Error(result.error || 'Failed to save driver details.');
+
+            // Hide the details form and navigate to the new page using the router
+            setShowDriverDetails(false);
+            onClose?.(); // Close the modal if there is one
+            router.push('/driverDashboard'); 
+            
+          } catch (err: any) {
+            setMessage(err.message);
+          }
+        }}
+      />
+    );
+  }
+
+  if (submitted) {
+    return (
+      <View style={styles.wrap}>
+         <Text style={styles.title}>You are all set, {name}!</Text>
+         <Text style={styles.successMsg}>
+           Your {designation} account has been created. A confirmation was sent to {email}.
+        </Text>
+       </View>
+    );
+  }
 
   return (
     <View style={styles.wrap}>

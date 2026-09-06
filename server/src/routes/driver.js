@@ -19,4 +19,25 @@ router.post('/driver-details', async (req, res) => {
   }
 });
 
+// NEW: fetch a driver's own profile for the dashboard sidebar
+router.get('/driver-details/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT dp.*, u.name
+       FROM driver_profiles dp
+       JOIN users u ON u.id = dp.user_id
+       WHERE dp.user_id = $1`,
+      [userId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No driver profile found.' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not fetch driver profile.' });
+  }
+});
+
 module.exports = router;

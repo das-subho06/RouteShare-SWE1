@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { API_URL } from './config';
 import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
   Text,
@@ -79,6 +80,7 @@ export default function Login({ onLogin, onPasswordReset }: LoginProps) {
   const [message, setMessage] = useState('');
 
   // Login fields
+  const [name, setName] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
 
@@ -101,7 +103,7 @@ export default function Login({ onLogin, onPasswordReset }: LoginProps) {
   // ---- Login ----
   const submitLogin = async () => {
   if (!username || !password) {
-    setMessage('Enter your username and password.');
+    setMessage(`Enter your ${designation === 'driver' ? 'name' : 'username'} and password.`);
     return;
   }
   try {
@@ -122,10 +124,15 @@ export default function Login({ onLogin, onPasswordReset }: LoginProps) {
       }
       return;
     }
-
+    await AsyncStorage.multiSet([
+  ['token', data.token],
+  ['userId', String(data.userId)],
+  ['designation', data.designation],
+  ['name', data.name],
+]);
     setMessage('');
     onLogin?.({ username, password, designation }); // parent can also read data.token/data.redirectTo
-    router.replace(data.redirectTo); // '/ride' or '/driverDashboard'
+    router.replace({ pathname: data.redirectTo, params: { name: data.name, username } }); // '/ride' or '/driverDashboard'
   } catch (err) {
     setMessage('Network error. Please try again.');
   }
@@ -380,10 +387,10 @@ const sendCode = async () => {
       {DesignationToggle}
 
       <Field
-        label="Username"
+        label={designation === 'driver' ? 'Name' : 'Username'}
         value={username}
         onChangeText={setUsername}
-        placeholder="janedoe_23"
+        placeholder={designation === 'driver' ? 'Jane Doe' : 'janedoe_23'}
       />
       <Field
         label="Password"
