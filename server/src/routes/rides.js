@@ -8,10 +8,13 @@ router.get('/history/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
     const result = await pool.query(
-      `SELECT * FROM rides
-       WHERE (rider_id = $1 OR driver_id = $1)
-         AND status IN ('completed', 'cancelled')
-       ORDER BY requested_at DESC
+      `SELECT r.*, u.name AS driver_name, dr.rating AS rider_given_rating
+       FROM rides r
+       LEFT JOIN users u ON u.id = r.driver_id
+       LEFT JOIN driver_rating dr ON dr.ride_id = r.id
+       WHERE (r.rider_id = $1 OR r.driver_id = $1)
+         AND r.status IN ('completed', 'cancelled')
+       ORDER BY r.requested_at DESC
        LIMIT 50`,
       [userId]
     );

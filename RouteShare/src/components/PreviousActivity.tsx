@@ -1,4 +1,4 @@
-import React,{useState} from 'react';
+import React,{useState, useEffect} from 'react';
 import {
   View,
   Text,
@@ -8,10 +8,13 @@ import {
   Image,
   Linking,
   Alert,
-  Platform,  useWindowDimensions, 
+  Platform,  useWindowDimensions,
+  ActivityIndicator, 
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';           // NEW — for the mobile menu icon
-import { useRouter, useLocalSearchParams } from 'expo-router';   // NEW
+import { Ionicons } from '@expo/vector-icons'; 
+import AsyncStorage from '@react-native-async-storage/async-storage';  
+import { API_URL } from './config';          
+import { useRouter, useLocalSearchParams } from 'expo-router';   
 import { Sidebar } from './Sidebar';    
 // -----------------------------------------------------------------------
 // Theme
@@ -32,7 +35,7 @@ type Ride = {
   id: string;
   rideType: string;
   date: string;
-  rideRef: string;
+  // rideRef: string;
   carImage: string;
   pickupTitle: string;
   pickupSubtitle: string;
@@ -44,62 +47,68 @@ type Ride = {
   driverRating: string;
   driverImage: string;
   driverPhone: string;
+  rideOptions: string[];
+};
+const OPTION_LABELS: Record<string, string> = {
+  female_driver: 'Female driver',
+  shared_ride: 'Shared ride',
+  no_shared_ride: 'No shared ride',
+  ac: 'AC required',
+  pet: 'Pet friendly',
+  quiet: 'Quiet ride',
+  extra_luggage: 'Extra luggage space',
+};
+// DB gives one comma-separated address string; split it into a short title
+// (before the first comma) and a subtitle (the rest) to match the card layout.
+function splitLabel(label?: string) {
+  if (!label) return { title: '', subtitle: '' };
+  const idx = label.indexOf(',');
+  if (idx === -1) return { title: label, subtitle: '' };
+  return { title: label.slice(0, idx), subtitle: label.slice(idx + 1).trim() };
+}
+
+function formatRideDate(iso?: string) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const day = d.toLocaleDateString('en-US', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+  const time = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  return `${day} • ${time}`;
+}
+
+// The DB has no car-photo column — this is purely decorative, keyed off
+// ride_class, same placeholder images the mock data used.
+const CAR_IMAGES: Record<string, string> = {
+  'Go Mini': 'https://images.unsplash.com/photo-1502877338535-766e1452684a?w=200&q=60',
+  'Go Sedan': 'https://images.unsplash.com/photo-1550355291-bbee04a92027?w=200&q=60',
+  'Go SUV': 'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?w=200&q=60',
+  'Go XL': 'https://images.unsplash.com/photo-1502877338535-766e1452684a?w=200&q=60',
+  'Go Premier': 'https://images.unsplash.com/photo-1550355291-bbee04a92027?w=200&q=60',
 };
 
-const RIDES: Ride[] = [
-  {
-    id: '1',
-    rideType: 'Go Sedan',
-    date: 'Mon, 27 May 2024 • 08:45 AM',
-    rideRef: '#RTE12873',
-    carImage: 'https://images.unsplash.com/photo-1550355291-bbee04a92027?w=200&q=60',
-    pickupTitle: 'Salt Lake, Sector V',
-    pickupSubtitle: 'Kolkata, West Bengal 700091',
-    destinationTitle: 'Park Street',
-    destinationSubtitle: 'Kolkata, West Bengal 700016',
-    fare: '₹278',
-    paymentMethod: 'Cash',
-    driverName: 'Amit Kumar',
-    driverRating: '4.8',
-    driverImage: 'https://randomuser.me/api/portraits/men/32.jpg',
-    driverPhone: '+911234567890',
-  },
-  {
-    id: '2',
-    rideType: 'Go Mini',
-    date: 'Sun, 26 May 2024 • 10:15 AM',
-    rideRef: '#RTE12812',
-    carImage: 'https://images.unsplash.com/photo-1502877338535-766e1452684a?w=200&q=60',
-    pickupTitle: 'New Town, Action Area 1',
-    pickupSubtitle: 'Kolkata, West Bengal 700156',
-    destinationTitle: 'Howrah Station',
-    destinationSubtitle: 'Kolkata, West Bengal 711101',
-    fare: '₹198',
-    paymentMethod: 'UPI',
-    driverName: 'Rahul Das',
-    driverRating: '4.7',
-    driverImage: 'https://randomuser.me/api/portraits/men/45.jpg',
-    driverPhone: '+911234567891',
-  },
-  {
-    id: '3',
-    rideType: 'Go SUV',
-    date: 'Sat, 25 May 2024 • 07:30 PM',
-    rideRef: '#RTE12745',
-    carImage: 'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?w=200&q=60',
-    pickupTitle: 'Ballygunge',
-    pickupSubtitle: 'Kolkata, West Bengal 700019',
-    destinationTitle: 'Netaji Subhas Airport',
-    destinationSubtitle: 'Kolkata, West Bengal 700052',
-    fare: '₹412',
-    paymentMethod: 'Card',
-    driverName: 'Sourav Mondal',
-    driverRating: '4.9',
-    driverImage: 'https://randomuser.me/api/portraits/men/52.jpg',
-    driverPhone: '+911234567892',
-  },
-];
-
+function mapRowToRide(row: any): Ride {
+  const pickup = splitLabel(row.pickup_label);
+  const destination = splitLabel(row.destination_label);
+  return {
+    id: String(row.id),
+    rideType: row.ride_class ?? 'Ride',
+    date: formatRideDate(row.requested_at),
+    // rideRef: row.ride_code ?? `#${row.id}`,
+    carImage: CAR_IMAGES[row.ride_class] ?? CAR_IMAGES['Go Mini'],
+    pickupTitle: pickup.title,
+    pickupSubtitle: pickup.subtitle,
+    destinationTitle: destination.title,
+    destinationSubtitle: destination.subtitle,
+    fare: `₹${row.price ?? 0}`,
+    paymentMethod: row.payment_method
+      ? row.payment_method.charAt(0).toUpperCase() + row.payment_method.slice(1)
+      : 'Cash',
+    driverName: row.driver_name ?? 'Driver',
+    driverRating: row.rider_given_rating != null ? `${row.rider_given_rating}` : '4.5',
+    driverImage: '',   // no photo column in your schema — RideCard already has this <Image> commented out
+    driverPhone: '',   // no phone column in your rides/users query — call button is already commented out too
+    rideOptions: Array.isArray(row.ride_options) ? row.ride_options : [],
+  };
+}
 // -----------------------------------------------------------------------
 // Ride card
 // -----------------------------------------------------------------------
@@ -124,14 +133,14 @@ function RideCard({ ride }: { ride: Ride }) {
       });
   };
 
-  const handleRefPress = () => {
-    Alert.alert('Ride reference', `Reference ID ${ride.rideRef} copied to clipboard.`);
-  };
+  // const handleRefPress = () => {
+  //   Alert.alert('Ride reference', `Reference ID ${ride.rideRef} copied to clipboard.`);
+  // };
 
   return (
     <View style={styles.card}>
       {/* Card header */}
-      <TouchableOpacity activeOpacity={0.8} onPress={() => Alert.alert(ride.rideType, `${ride.date}\n${ride.rideRef}`)}>
+      <TouchableOpacity activeOpacity={0.8} onPress={() => Alert.alert(ride.rideType, `${ride.date}\n`)}>
         <View style={styles.cardHeader}>
           <Image source={{ uri: ride.carImage }} style={styles.carImage} />
           <View style={{ flex: 1 }}>
@@ -139,9 +148,9 @@ function RideCard({ ride }: { ride: Ride }) {
             <View style={styles.dateRow}>
               <Text style={styles.dateText}>{ride.date}</Text>
               <Text style={styles.dot}> • </Text>
-              <TouchableOpacity onPress={handleRefPress}>
+              {/* <TouchableOpacity onPress={handleRefPress}>
                 <Text style={styles.refText}>{ride.rideRef}</Text>
-              </TouchableOpacity>
+              </TouchableOpacity> */}
             </View>
           </View>
         </View>
@@ -171,7 +180,16 @@ function RideCard({ ride }: { ride: Ride }) {
           </View>
         </View>
       </View>
-
+        {/* Ride options */}
+      {ride.rideOptions.length > 0 && (
+        <View style={styles.optionsRow}>
+          {ride.rideOptions.map((key) => (
+            <View key={key} style={styles.optionPill}>
+              <Text style={styles.optionPillText}>{OPTION_LABELS[key] ?? key}</Text>
+            </View>
+          ))}
+        </View>
+      )}
       {/* Fare */}
       <TouchableOpacity
         activeOpacity={0.85}
@@ -235,10 +253,38 @@ export default function PreviousActivity() {
   // Same param convention Rider.tsx uses, so the name carries across screens.
   const { name: nameParam } = useLocalSearchParams<{ name?: string | string[] }>();
   const riderName = (Array.isArray(nameParam) ? nameParam[0] : nameParam)?.trim() || 'Rider';
+  const [rides, setRides] = useState<Ride[]>([]);
+const [loadingRides, setLoadingRides] = useState(true);
+const [ridesError, setRidesError] = useState<string | null>(null);
 
+useEffect(() => {
+  let cancelled = false;
+  (async () => {
+    try {
+      const userId = await AsyncStorage.getItem('userId');
+      if (!userId) {
+        if (!cancelled) { setRides([]); setLoadingRides(false); }
+        return;
+      }
+      const res = await fetch(`${API_URL}/rides/history/${userId}`);
+      if (!res.ok) throw new Error('Failed to load ride history');
+      const rows = await res.json();
+      if (!cancelled) setRides(rows.map(mapRowToRide));
+    } catch (err) {
+      console.error('Could not load ride history:', err);
+      if (!cancelled) setRidesError('Could not load your ride history.');
+    } finally {
+      if (!cancelled) setLoadingRides(false);
+    }
+  })();
+  return () => { cancelled = true; };
+}, []);
   const goTo = (key: string) => {
     if (key === 'ride') {
       router.push({ pathname: '/rider', params: { name: riderName, username: riderName } });
+    }
+    if (key === 'chat') {
+      router.push({ pathname: '/chat', params: { name: riderName, username: riderName } });
     }
     // 'activity' is this screen — nothing to do.
     // 'chat' has no standalone screen yet (chat currently only lives inside
@@ -278,11 +324,20 @@ export default function PreviousActivity() {
         <Text style={styles.pageTitle}>Previous activity</Text>
         <Text style={styles.pageSubtitle}>Here's a summary of your past rides.</Text>
 
-        <View style={styles.cardsRow}>
-          {RIDES.map((ride) => (
-            <RideCard key={ride.id} ride={ride} />
-          ))}
-        </View>
+       {loadingRides ? (
+  <ActivityIndicator color={CORAL} style={{ marginTop: 40 }} />
+) : ridesError ? (
+  <Text style={styles.pageSubtitle}>{ridesError}</Text>
+) : rides.length === 0 ? (
+  <Text style={styles.pageSubtitle}>No past rides yet — once you complete a trip, it'll show up here.</Text>
+) : (
+  <View style={styles.cardsRow}>
+    {rides.map((ride) => (
+      <RideCard key={ride.id} ride={ride} />
+    ))}
+  </View>
+)}
+
       </ScrollView>
     </View>
   );
@@ -496,4 +551,21 @@ const styles = StyleSheet.create({
   callIcon: {
     fontSize: 18,
   },
+  optionsRow: {
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  gap: 6,
+  marginTop: 14,
+},
+optionPill: {
+  backgroundColor: CORAL_LIGHT,
+  borderRadius: 999,
+  paddingVertical: 4,
+  paddingHorizontal: 10,
+},
+optionPillText: {
+  fontSize: 11.5,
+  color: CORAL,
+  fontWeight: '600',
+},
 });

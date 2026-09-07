@@ -448,7 +448,10 @@ const OPTION_LIST = [
   { key: "quiet", label: "Quiet ride" },
   { key: "extra_luggage", label: "Extra luggage space" },
 ];
-
+const MUTUALLY_EXCLUSIVE_OPTIONS: Record<string, string> = {
+  shared_ride: "no_shared_ride",
+  no_shared_ride: "shared_ride",
+};
 function OptionsModal({
   visible,
   selected,
@@ -1115,6 +1118,12 @@ const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
       params: { name: riderName, username: riderName },
     });
   }
+  if (key === "chat") {
+    router.push({
+      pathname: "/chat",   // adjust if your file/route is registered under a different path
+      params: { name: riderName, username: riderName },
+    });
+  }
   // "ride" is this screen — nothing to do.
   // "chat" has no standalone screen yet.
 };
@@ -1323,8 +1332,17 @@ const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
         visible={optionsModal}
         selected={rideOptions}
         onClose={() => setOptionsModal(false)}
-        onToggle={(key) => setRideOptions((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))}
-      />
+        onToggle={(key) =>
+  setRideOptions((prev) => {
+    if (prev.includes(key)) {
+      return prev.filter((k) => k !== key);
+    }
+    const conflictingKey = MUTUALLY_EXCLUSIVE_OPTIONS[key];
+    const withoutConflict = conflictingKey ? prev.filter((k) => k !== conflictingKey) : prev;
+    return [...withoutConflict, key];
+  })
+}
+        />
 
       <RideToast />
     </View>

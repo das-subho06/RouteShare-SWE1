@@ -39,6 +39,7 @@ const DEFAULT_NAV_ITEMS: SidebarNavItem[] = [
   { key: "ride", label: "Ride", icon: "car" },
   { key: "activity", label: "Previous activity", icon: "time-outline" },
   { key: "chat", label: "Chat", icon: "chatbubble-ellipses-outline" },
+  { key: "ongoing_rides", label: "Ongoing rides", icon: "car-outline" },
 ];
 
 const colors = {
@@ -81,6 +82,12 @@ export function Sidebar({
   if (key === "activity") {
     router.push({
       pathname: "/previousActivity",   // adjust if your file/route is registered under a different path
+      params: { name: riderName, username: riderName },
+    });
+  }
+  if (key === "chat") {
+    router.push({
+      pathname: "/chat",   // adjust if your file/route is registered under a different path
       params: { name: riderName, username: riderName },
     });
   }
