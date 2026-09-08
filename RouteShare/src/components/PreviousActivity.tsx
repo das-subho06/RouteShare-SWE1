@@ -50,13 +50,9 @@ type Ride = {
   rideOptions: string[];
 };
 const OPTION_LABELS: Record<string, string> = {
-  female_driver: 'Female driver',
   shared_ride: 'Shared ride',
   no_shared_ride: 'No shared ride',
-  ac: 'AC required',
-  pet: 'Pet friendly',
-  quiet: 'Quiet ride',
-  extra_luggage: 'Extra luggage space',
+
 };
 // DB gives one comma-separated address string; split it into a short title
 // (before the first comma) and a subtitle (the rest) to match the card layout.

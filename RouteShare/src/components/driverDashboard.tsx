@@ -240,11 +240,16 @@ if (socket.connected) {
         setCodeError('');
         setCodeVerified(false);
       });
+      socket.on('request_taken', ({ id }: any) => {   // NEW
+  console.log('🚫 request_taken, removing from list:', id);
+  setRequests((prev) => prev.filter((r) => String(r.id) !== String(id)));
+});
     })();
 
     return () => {
       socket?.off('incoming_request');
       socket?.off('ride_unavailable');
+      socket?.off('request_taken'); 
     };
   }, []);
 

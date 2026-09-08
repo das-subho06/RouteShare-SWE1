@@ -440,13 +440,8 @@ function PaymentModal({
 /* ------------------------------------------------------------------ */
 
 const OPTION_LIST = [
-  { key: "female_driver", label: "Female driver"},
   {key: "shared_ride", label: "Shared ride"},
   { key: "no_shared_ride", label: "No shared ride" },
-  { key: "ac", label: "AC required" },
-  { key: "pet", label: "Pet friendly" },
-  { key: "quiet", label: "Quiet ride" },
-  { key: "extra_luggage", label: "Extra luggage space" },
 ];
 const MUTUALLY_EXCLUSIVE_OPTIONS: Record<string, string> = {
   shared_ride: "no_shared_ride",
@@ -1033,7 +1028,7 @@ useEffect(() => {
   const socket = getSocket();
   const handleRideCancelled = () => {
     skipNextFocusResetRef.current = true;
-    setConfirmedRide(null);
+   
     setAutoSearchAfterCancel(true);
     setChooseRideVisible(true);
     Alert.alert(

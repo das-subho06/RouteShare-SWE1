@@ -278,7 +278,7 @@ export default function Signup({ onSubmit, onClose }: SignupProps) {
             // Hide the details form and navigate to the new page using the router
             setShowDriverDetails(false);
             onClose?.(); // Close the modal if there is one
-            router.push('/driverDashboard'); 
+            router.push({ pathname: '/driverDashboard', params: { name, username:name } });
             
           } catch (err: any) {
             setMessage(err.message);
