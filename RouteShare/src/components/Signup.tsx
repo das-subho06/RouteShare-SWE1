@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from "./lib/storage";
 import {
   View,
   Text,
@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { API_URL } from './config';
 import { useRouter } from 'expo-router';
-import DriverDetails from './Driver';
+import DriverDetails from './Driver/Driver';
 
 // ---------------------------------------------------------------------------
 // Design tokens — mirrors RouteShareLanding's palette

@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { API_URL } from './config';
 import { useRouter } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from './lib/storage';
 import {
   View,
   Text,

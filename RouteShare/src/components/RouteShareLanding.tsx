@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import Signup from './Signup';
 import Login from './Login';
-import DriverDetails from './Driver';
+import DriverDetails from './Driver/Driver';
 import DriverMessage from './Toast';
 import { API_URL } from './config';
 import Svg, { Path } from 'react-native-svg';
@@ -51,7 +51,7 @@ const PLAN_CARD_GAP = 20;
 // Source file is 711x790, transparent background.
 const HERO_TAXI_IMG = require('../../assets/images/hero-taxi-phone.png');
 const HERO_TAXI_ASPECT_RATIO = 711 / 790;
-
+const LOGO_IMG = require('../../assets/images/logoRemovebg.png');
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -507,9 +507,14 @@ const scrollPlans = (direction: 1 | -1) => {
           {/* Nav */}
           <View style={[styles.navRow, isWide && styles.navRowWide]}
           renderToHardwareTextureAndroid>
-            <Text style={styles.logo}>
-              route<Text style={{ color: COLORS.coral }}>share</Text>
-            </Text>
+            <View style={styles.logoBox}>
+  <Image
+    source={require('../../assets/images/logoRemovebg.png')}
+    style={styles.logoImage}
+    resizeMode="contain"
+  />
+</View>
+            
             {isWide && (
               <View style={styles.navLinks}>
                 <NavLink label="Home" active onPress={() => scrollToSection('home')} />
@@ -981,11 +986,27 @@ const styles = StyleSheet.create({
   },
   navRowWide: {},
   logo: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: COLORS.white,
-    letterSpacing: 0.5,
+    // fontSize: 22,
+    // fontWeight: '800',
+    // color: COLORS.white,
+    // letterSpacing: 0.5,
+     width: 120,
+  height: 32,
   },
+  logoBox: {
+  width: 40,          // keep this matching the ORIGINAL footprint you already have
+  height: 40,
+  justifyContent: 'flex-start',
+  alignItems: 'flex-start',
+  overflow: 'visible',  // <-- key: lets the image spill outside the box
+},
+logoImage: {
+  top:-70,
+  left:-20,
+  width: 300,           // <-- crank this as big as you want
+  height: 300,
+  position: 'absolute', // <-- pulled out of flex flow, so it can't push siblings
+},
   navLinks: {
     flexDirection: 'row',
     gap: 28,

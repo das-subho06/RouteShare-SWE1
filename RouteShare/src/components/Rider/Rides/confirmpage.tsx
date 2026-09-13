@@ -13,8 +13,8 @@ import {
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons, FontAwesome } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getSocket } from "./lib/socket";
+import AsyncStorage from "../../lib/storage";
+import { getSocket } from "../../lib/socket";
 
 /* ------------------------------------------------------------------ */
 /*  Theme — Kept in sync with Rider.tsx                               */
@@ -82,6 +82,36 @@ function RouteMap({
   distanceKm: number | string;
 }) {
   const nativeMapRef = useRef<any>(null);
+  const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+  useEffect(() => {
+    if (!destination) {
+      setRouteCoords([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const url =
+          `https://router.project-osrm.org/route/v1/driving/` +
+          `${pickup.longitude},${pickup.latitude};${destination.longitude},${destination.latitude}` +
+          `?overview=full&geometries=geojson`;
+        const res = await fetch(url);
+        const data = await res.json();
+        const coords = data?.routes?.[0]?.geometry?.coordinates;
+        if (!cancelled && Array.isArray(coords) && coords.length > 0) {
+          setRouteCoords(coords.map(([lng, lat]: [number, number]) => ({ latitude: lat, longitude: lng })));
+        } else if (!cancelled) {
+          setRouteCoords([]); // fall back to the straight line below
+        }
+      } catch (err) {
+        console.error("Failed to fetch route geometry, falling back to straight line", err);
+        if (!cancelled) setRouteCoords([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pickup.latitude, pickup.longitude, destination?.latitude, destination?.longitude]);
 
   useEffect(() => {
     if (Platform.OS === "web") return;
@@ -95,7 +125,7 @@ function RouteMap({
   if (Platform.OS === "web") {
     const centerLat = destination ? (pickup.latitude + destination.latitude) / 2 : pickup.latitude;
     const centerLng = destination ? (pickup.longitude + destination.longitude) / 2 : pickup.longitude;
-    const html = `
+     const html = `
       <!DOCTYPE html><html><head>
       <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
       <style>html,body,#map{height:100%;margin:0;}</style>
@@ -119,7 +149,11 @@ function RouteMap({
          .addTo(map);
          
         // Route Line
-        L.polyline([[${pickup.latitude},${pickup.longitude}],[${destination.latitude},${destination.longitude}]], {color:'${colors.brand}', weight:4, opacity: 0.8}).addTo(map);
+        L.polyline(${JSON.stringify(
+          routeCoords.length > 0
+            ? routeCoords.map((c) => [c.latitude, c.longitude])
+            : [[pickup.latitude, pickup.longitude], [destination.latitude, destination.longitude]]
+        )}, {color:'${colors.brand}', weight:4, opacity: 0.8}).addTo(map);
         ` : ""}
       </script>
       <style>
@@ -162,7 +196,7 @@ function RouteMap({
             <Marker coordinate={destination} title="Destination" description={destination.label}>
               <View style={[mapStyles.pin, { backgroundColor: colors.destDot }]} />
             </Marker>
-            <Polyline coordinates={[pickup, destination]} strokeColor={colors.brand} strokeWidth={4} />
+            <Polyline  coordinates={routeCoords.length > 0 ? routeCoords : [pickup, destination]} strokeColor={colors.brand} strokeWidth={4} />
           </>
         )}
       </MapView>
@@ -199,6 +233,7 @@ export default function ConfirmPage() {
   const driverSeats = single(params.driverSeats) || "4"
   const pickupLabel = single(params.pickup) || "Salt Lake, Sector V";
   const destLabel = single(params.destination) || "Park Street";
+  const riderName = single(params.riderName);
   const pickupLat = parseFloat(single(params.pickupLat) || "22.5726");
 const pickupLng = parseFloat(single(params.pickupLng) || "88.4312");
 const destLat = parseFloat(single(params.destLat) || "22.5527");
@@ -311,6 +346,7 @@ const destCoords: Place = {
         driverName,
         rideCode, driverId,
         riderId: myUserId,
+        riderName
       },
     });
   });

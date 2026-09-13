@@ -3,8 +3,8 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from "react-nati
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import Loader from "./Loader";
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getSocket } from './lib/socket';
+import AsyncStorage from "../../lib/storage";
+import { getSocket } from '../../lib/socket';
 /* ------------------------------------------------------------------ */
 /*  Theme — kept in sync with Rider.tsx so the card feels native to    */
 /*  the rest of the app, but this file has zero import dependency on   */
@@ -36,11 +36,14 @@ export type RideOption = {
   id: string;
   name: string;
   tagline: string;
+  no_ac:boolean;
   ac: boolean;
   seats: number;
   minutesAway: number;
+  minFare: number;
   baseFare: number;
   perKm: number;
+  perMinute: number;
   icon: keyof typeof MaterialCommunityIcons.glyphMap;
 };
 
@@ -49,57 +52,71 @@ export const RIDE_OPTIONS: RideOption[] = [
     id: "mini",
     name: "Go Mini",
     tagline: "Affordable everyday rides",
-    ac: true,
+    no_ac:true,
+    ac: false,
     seats: 4,
     minutesAway: 3,
     baseFare: 40,
     perKm: 12.54,
+     minFare: 60,
+     perMinute: 1.5,
     icon: "car-hatchback",
   },
   {
     id: "sedan",
     name: "Go Sedan",
     tagline: "Comfortable sedans for daily travel",
+    no_ac:false,
     ac: true,
     seats: 4,
     minutesAway: 5,
     baseFare: 60,
     perKm: 17.3,
+    minFare: 85,
+    perMinute: 2,
     icon: "car",
   },
   {
     id: "suv",
     name: "Go SUV",
     tagline: "More space for you and your group",
+    no_ac:false,
     ac: true,
     seats: 6,
     minutesAway: 7,
     baseFare: 90,
     perKm: 25.56,
+    minFare: 130,
+    perMinute: 2.5,
     icon: "car-estate",
   },
   {
     id: "xl",
     name: "Go XL",
     tagline: "Extra room for bigger groups",
+    no_ac:false,
     ac: true,
     seats: 6,
     minutesAway: 9,
     baseFare: 120,
     perKm: 31.1,
+    perMinute: 3,
+    minFare: 170,
     icon: "car-side",
   },
-  {
-    id: "premier",
-    name: "Go Premier",
-    tagline: "Premium rides for a luxury experience",
-    ac: true,
-    seats: 4,
-    minutesAway: 11,
-    baseFare: 150,
-    perKm: 36.67,
-    icon: "car-sports",
-  },
+  // {
+  //   id: "premier",
+  //   name: "Go Premier",
+  //   tagline: "Premium rides for a luxury experience",
+  //   ac: true,
+  //   seats: 4,
+  //   minutesAway: 11,
+  //   baseFare: 150,
+  //   perMinute: 3.5,
+  //   minFare: 220,
+  //   perKm: 36.67,
+  //   icon: "car-sports",
+  // },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -116,9 +133,11 @@ export type ChooseRideProps = {
   riderCount: number; 
    paymentMethod: string;          // NEW
   rideOptions: string[];           // NEW — comes from Rider.tsx's RiderCountModal
+  riderName?: string;
   rides?: RideOption[];
   initialSelectedId?: string;
    autoSearch?: boolean;
+  excludeDriverId?: string | null;   // NEW — set when auto-retrying after a driver cancelled
   onClose: () => void;
   onConfirm: (ride: RideOption, price: number) => void;
 
@@ -135,8 +154,10 @@ export default function ChooseRide({
   paymentMethod,      // NEW
   rideOptions,        // NEW
   rides = RIDE_OPTIONS,
+  riderName,
   initialSelectedId,
   autoSearch,
+  excludeDriverId,
   onClose,
   onConfirm,  
 }: ChooseRideProps) {
@@ -174,8 +195,7 @@ if (confirming && selected) {
           if (requestSentRef.current) return;
           requestSentRef.current = true;
           const riderId = await AsyncStorage.getItem('userId');
-          const riderName = await AsyncStorage.getItem('name');
-
+          
           const socket = getSocket();
           socket.emit('rider_online', { riderId });   // keep this — server needs it to route ride_accepted back
 
@@ -188,8 +208,10 @@ if (confirming && selected) {
             durationMinutes,
             price: selectedPrice,
             rideName: selected.name,
+            carSeats: selected.seats,
             riderCount, paymentMethod,     // NEW
             rideOptions,   
+            excludeDriverId,   // NEW — server won't re-offer this trip to the driver who just cancelled it
           });
             const onSent = ({ requestId,notifiedDrivers }: any) => {
                if (requestId) activeRequestIdRef.current = requestId;
@@ -220,6 +242,7 @@ if (confirming && selected) {
                 vehicleNumber: driver?.vehicle_number,
                 driverSeats: String(driver?.seats),
                 rideCode: rideCode ?? "",
+                riderName: riderName ?? "",
               },
             });
             socket.off('request_sent', onSent);
@@ -268,6 +291,12 @@ if (confirming && selected) {
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={styles.rideName} numberOfLines={1}>{ride.name}</Text>
                 <View style={styles.badgeRow}>
+                  {ride.no_ac && (
+                    <View style={styles.badge}>
+                      <Ionicons name="snow-outline" size={11} color={colors.textMuted} />
+                      <Text style={styles.badgeText}>No AC</Text>
+                    </View>
+                  )}
                   {ride.ac && (
                     <View style={styles.badge}>
                       <Ionicons name="snow-outline" size={11} color={colors.textMuted} />

@@ -3,7 +3,7 @@ import {
   SafeAreaView,
   View,
   Text,
-  Image,
+  Image, ImageBackground,
   TextInput,
   TouchableOpacity,
   FlatList,
@@ -15,8 +15,12 @@ import {
   Animated,
   Easing,
 } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import {Sidebar} from './Sidebar';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import { Audio } from 'expo-av';
+import {Sidebar} from '../Sidebar';
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -33,6 +37,7 @@ interface Message {
   fileName?: string;
   fileSize?: string;
   audioDuration?: number; // seconds
+  audioUri?: string;
   lat?: number;
   lng?: number;
   timestamp: string;
@@ -65,20 +70,7 @@ const CONTACTS: Contact[] = [
 
 const UNREAD_SEED: Record<string, number> = { c1: 2, c2: 1, c4: 3 };
 
-const SAMPLE_PHOTOS = [
-  'https://picsum.photos/id/1015/400/300',
-  'https://picsum.photos/id/1025/400/300',
-  'https://picsum.photos/id/1035/400/300',
-  'https://picsum.photos/id/1043/400/300',
-  'https://picsum.photos/id/1050/400/300',
-  'https://picsum.photos/id/1062/400/300',
-];
 
-const SAMPLE_FILES = [
-  { name: 'Trip_Invoice.pdf', size: '182 KB' },
-  { name: 'Ride_Ticket.pdf', size: '96 KB' },
-  { name: 'Route_Map.docx', size: '340 KB' },
-];
 
 function seedMessages(): Record<string, Message[]> {
   const now = (h: string, m: string) => `${h}:${m} AM`;
@@ -146,6 +138,13 @@ function nextId() {
   return `msg-${idCounter}`;
 }
 
+function formatFileSize(bytes?: number): string {
+  if (bytes == null) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
@@ -166,8 +165,6 @@ export default function ChatApp() {
   const [inputText, setInputText] = useState('');
 
   const [showAttachSheet, setShowAttachSheet] = useState(false);
-  const [showPhotoPicker, setShowPhotoPicker] = useState(false);
-  const [showFilePicker, setShowFilePicker] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false); // narrow screens
@@ -182,6 +179,8 @@ export default function ChatApp() {
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [playProgress, setPlayProgress] = useState(0);
   const playTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const soundRef = useRef<Audio.Sound | null>(null);
 
   const [toast, setToast] = useState<string | null>(null);
   const listRef = useRef<FlatList<Message>>(null);
@@ -217,6 +216,8 @@ export default function ChatApp() {
     return () => {
       if (recordTimer.current) clearInterval(recordTimer.current);
       if (playTimer.current) clearInterval(playTimer.current);
+      recordingRef.current?.stopAndUnloadAsync().catch(() => {});
+      soundRef.current?.unloadAsync().catch(() => {});
     };
   }, []);
 
@@ -311,10 +312,20 @@ export default function ChatApp() {
     setShowAttachSheet(true);
   }
 
-  function pickPhotoQuick() {
+  async function pickPhotoQuick() {
     if (isBlocked) return showToast('You have blocked this user.');
     setShowAttachSheet(false);
-    setShowPhotoPicker(true);
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      showToast('Photo library permission is required to share photos.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets?.length) return;
+    sendPhoto(result.assets[0].uri);
   }
 
   function sendPhoto(uri: string) {
@@ -328,14 +339,16 @@ export default function ChatApp() {
       timestamp: fmtTime(),
       read: false,
     });
-    setShowPhotoPicker(false);
     autoReply(activeChatId);
   }
 
-  function pickFileQuick() {
+  async function pickFileQuick() {
     if (isBlocked) return showToast('You have blocked this user.');
     setShowAttachSheet(false);
-    setShowFilePicker(true);
+    const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    sendFile(asset.name, formatFileSize(asset.size));
   }
 
   function sendFile(name: string, size: string) {
@@ -350,7 +363,6 @@ export default function ChatApp() {
       timestamp: fmtTime(),
       read: false,
     });
-    setShowFilePicker(false);
     autoReply(activeChatId);
   }
 
@@ -380,11 +392,19 @@ export default function ChatApp() {
     showToast('Location shared with ' + (activeContact?.name ?? 'contact'));
   }
 
-  function toggleRecording() {
+  async function toggleRecording() {
     if (isBlocked) return showToast('You have blocked this user.');
     if (!activeChatId) return;
     setShowAttachSheet(false);
     if (!isRecording) {
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) {
+        showToast('Microphone permission is required to record voice messages.');
+        return;
+      }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      recordingRef.current = recording;
       setIsRecording(true);
       setRecordSeconds(0);
       recordTimer.current = setInterval(() => {
@@ -394,12 +414,19 @@ export default function ChatApp() {
       if (recordTimer.current) clearInterval(recordTimer.current);
       setIsRecording(false);
       const duration = Math.max(1, recordSeconds);
+      const recording = recordingRef.current;
+      recordingRef.current = null;
+      if (!recording) return;
+      await recording.stopAndUnloadAsync();
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      const uri = recording.getURI();
       appendMessage(activeChatId, {
         id: nextId(),
         chatId: activeChatId,
         sender: 'me',
         type: 'audio',
         audioDuration: duration,
+        audioUri: uri ?? undefined,
         timestamp: fmtTime(),
         read: false,
       });
@@ -408,27 +435,37 @@ export default function ChatApp() {
     }
   }
 
-  function togglePlay(messageId: string, duration: number) {
+  async function togglePlay(messageId: string, uri: string | undefined, duration: number) {
+    // Stop whatever's currently playing, regardless of which message it belongs to.
+    if (playTimer.current) clearInterval(playTimer.current);
+    if (soundRef.current) {
+      await soundRef.current.unloadAsync().catch(() => {});
+      soundRef.current = null;
+    }
     if (playingId === messageId) {
-      if (playTimer.current) clearInterval(playTimer.current);
       setPlayingId(null);
       setPlayProgress(0);
       return;
     }
-    if (playTimer.current) clearInterval(playTimer.current);
+    if (!uri) {
+      showToast('This voice message is unavailable.');
+      return;
+    }
     setPlayingId(messageId);
     setPlayProgress(0);
-    const totalTicks = duration * 10;
-    let tick = 0;
-    playTimer.current = setInterval(() => {
-      tick += 1;
-      setPlayProgress(tick / totalTicks);
-      if (tick >= totalTicks) {
-        if (playTimer.current) clearInterval(playTimer.current);
+    const { sound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true });
+    soundRef.current = sound;
+    sound.setOnPlaybackStatusUpdate((status) => {
+      if (!status.isLoaded) return;
+      const total = status.durationMillis || duration * 1000;
+      setPlayProgress(total ? status.positionMillis / total : 0);
+      if (status.didJustFinish) {
         setPlayingId(null);
         setPlayProgress(0);
+        sound.unloadAsync().catch(() => {});
+        if (soundRef.current === sound) soundRef.current = null;
       }
-    }, 100);
+    });
   }
 
   // -------------------------------------------------------------------
@@ -561,7 +598,7 @@ export default function ChatApp() {
             {item.type === 'audio' && (
               <View style={styles.audioRow}>
                 <TouchableOpacity
-                  onPress={() => togglePlay(item.id, item.audioDuration ?? 3)}
+                  onPress={() => togglePlay(item.id, item.audioUri, item.audioDuration ?? 3)}
                   style={[styles.playBtn, mine ? styles.playBtnMine : styles.playBtnTheirs]}
                 >
                   <Text style={{ color: mine ? '#fff' : '#FF6F61', fontSize: 14 }}>
@@ -594,22 +631,45 @@ export default function ChatApp() {
   // -------------------------------------------------------------------
   // Panels
   // -------------------------------------------------------------------
-  const goTo = (key: string) => {
-    if (key === 'ride') {
-      router.push({ pathname: '/rider', params: { name: riderName, username: riderName } });
-    }
+ const handleSidebarSelect = (key: string) => {
+    if (key === "ride") {
+    router.push({
+      pathname: "/rider",   // adjust if your file/route is registered under a different path
+      params: { name: riderName, username: riderName },
+    });
   }
+  if (key === "activity") {
+    router.push({
+      pathname: "/previousActivity",   // adjust if your file/route is registered under a different path
+      params: { name: riderName, username: riderName },
+    });
+  }
+  if (key === "ongoing_rides") {
+    router.push({
+      pathname: "/shareRide",   // adjust if your file/route is registered under a different path
+      params: { name: riderName, username: riderName },
+    });
+  }
+
+//   // "ride" is this screen — nothing to do.
+//   // "chat" has no standalone screen yet.
+};
   const showListPanel = isWide || !activeChatId;
   const showChatPanel = !!activeChatId;
   const showProfilePanel = !!activeChatId && isWide;
 
   return (
+     <ImageBackground source={BG_IMAGE } style={styles.bgImage} 
+     imageStyle={{ width: '100%', height: '100%', marginLeft:120 }}
+  resizeMode="contain"
+     blurRadius={ 1 }>
+    <View style={styles.bgOverlay} />
     <SafeAreaView style={styles.safe}>
       <View style={styles.appBar}>
       {isWide ? (
               <Sidebar
-                activeKey="activity"
-                onSelectItem={goTo}
+                activeKey="chat"
+                onSelectItem={handleSidebarSelect}
                 user={{ name: riderName, profileLabel: 'View profile' }}
               />
             ) : (
@@ -618,8 +678,8 @@ export default function ChatApp() {
                   <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setSidebarOpen(false)} />
                   <View style={styles.mobileSidebarPanel}>
                     <Sidebar
-                      activeKey="activity"
-                      onSelectItem={(key) => { setSidebarOpen(false); goTo(key); }}
+                      activeKey="chat"
+                      onSelectItem={(key) => { setSidebarOpen(false); handleSidebarSelect(key); }}
                       user={{ name: riderName, profileLabel: 'View profile' }}
                     />
                   </View>
@@ -628,11 +688,12 @@ export default function ChatApp() {
             )}
             
       </View>
-
+            
       <View style={styles.mainRow}>
         {/* --------------------------- CHAT LIST --------------------------- */}
         {showListPanel && (
-          <View style={[styles.panel, styles.listPanel, isWide && styles.panelBordered]}>
+          <BlurView intensity={5} tint="dark"
+           style={[styles.glassPanel, styles.listPanel, isWide && styles.panelBordered]}>
             <View style={styles.searchBar}>
               <Text style={{ marginRight: 6 }}>🔍</Text>
               <TextInput
@@ -694,7 +755,7 @@ export default function ChatApp() {
               ItemSeparatorComponent={() => <View style={styles.separator} />}
               showsVerticalScrollIndicator={false}
             />
-          </View>
+          </BlurView>
         )}
 
         {/* --------------------------- CONVERSATION --------------------------- */}
@@ -897,46 +958,6 @@ export default function ChatApp() {
         </Pressable>
       </Modal>
 
-      {/* Photo picker */}
-      <Modal visible={showPhotoPicker} animationType="slide" transparent onRequestClose={() => setShowPhotoPicker(false)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowPhotoPicker(false)}>
-          <Pressable style={styles.sheetCard} onPress={() => {}}>
-            <Text style={styles.sheetTitle}>Choose a photo</Text>
-            <View style={styles.photoGrid}>
-              {SAMPLE_PHOTOS.map((uri) => (
-                <TouchableOpacity key={uri} onPress={() => sendPhoto(uri)}>
-                  <Image source={{ uri }} style={styles.photoThumb} />
-                </TouchableOpacity>
-              ))}
-            </View>
-            <TouchableOpacity style={styles.closeModalBtn} onPress={() => setShowPhotoPicker(false)}>
-              <Text style={{ color: '#9b8f8c', fontWeight: '600' }}>Cancel</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/* File picker */}
-      <Modal visible={showFilePicker} animationType="slide" transparent onRequestClose={() => setShowFilePicker(false)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowFilePicker(false)}>
-          <Pressable style={styles.sheetCard} onPress={() => {}}>
-            <Text style={styles.sheetTitle}>Choose a document</Text>
-            {SAMPLE_FILES.map((f) => (
-              <TouchableOpacity key={f.name} style={styles.fileRow} onPress={() => sendFile(f.name, f.size)}>
-                <Text style={{ fontSize: 20, marginRight: 10 }}>📄</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontWeight: '700', color: '#3a2e2c' }}>{f.name}</Text>
-                  <Text style={{ color: '#9b8f8c', fontSize: 12 }}>{f.size}</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={styles.closeModalBtn} onPress={() => setShowFilePicker(false)}>
-              <Text style={{ color: '#9b8f8c', fontWeight: '600' }}>Cancel</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
       {/* Emoji picker */}
       <Modal visible={showEmoji} animationType="fade" transparent onRequestClose={() => setShowEmoji(false)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setShowEmoji(false)}>
@@ -1012,6 +1033,7 @@ export default function ChatApp() {
         </View>
       )}
     </SafeAreaView>
+    </ImageBackground>
   );
 }
 
@@ -1099,256 +1121,1391 @@ function MenuItem({ label, icon, onPress, destructive }: { label: string; icon: 
 // ---------------------------------------------------------------------------
 // Styles
 // ---------------------------------------------------------------------------
-
-const RED = '#FF6F61';
-const RED_DARK = '#E85A4F';
-const BG = '#F3E4DE';
-const CARD = '#FFFFFF';
-const TEXT_DARK = '#3A2E2C';
-const TEXT_MUTED = '#9B8F8C';
+   const BG_IMAGE = require('@/assets/images/chat-bg.png'); // adjust path to your project
+const RED_DARK = '#e85d58';
+const BG = '#111216';
+const CARD = 'rgba(255,255,255,0.08)';
+const TEXT_DARK = '#FFFFFF';
+const TEXT_MUTED = 'rgba(255,255,255,0.60)';
+const GLASS = 'rgba(255,255,255,0.08)';
+const GLASS_LIGHT = 'rgba(255,255,255,0.12)';
+const GLASS_BORDER = 'rgba(255,255,255,0.16)';
+const WHITE = '#FFFFFF';
+const ONLINE = '#39D98A';
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, flexDirection: 'row', backgroundColor: BG,  },   // added flexDirection: 'row'
-  mobileSidebarOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 20, flexDirection: 'row' },   // NEW
-  mobileSidebarPanel: { width: 248, height: '100%' },   // NEW
+  bgImage: {
+    ...StyleSheet.absoluteFillObject,
+     backgroundColor: '#0D0E12',
+},
+bgOverlay: {
+  ...StyleSheet.absoluteFillObject,
+  backgroundColor: 'rgba(13,14,18,0.55)',
+},
+  safe: {
+    flex: 1,
+    flexDirection: 'row',
+    backgroundColor:'transparent',
+  },
+
+  mobileSidebarOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 20,
+    flexDirection: 'row',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+
+  mobileSidebarPanel: {
+    width: 250,
+    height: '100%',
+  },
+   sidebar: {
+  width: 72,
+  borderRadius: 24,
+  overflow: 'hidden',
+  backgroundColor: 'rgba(255,255,255,0.06)',
+  borderWidth: 1,
+  borderColor: 'rgba(255,255,255,0.16)',
+},
   appBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    backgroundColor: 'transparent',
   },
-  appTitle: { fontSize: 20, fontWeight: '800', color: RED, letterSpacing: 0.5 },
-  appTitleAccent: { fontSize: 18 },
 
-  mainRow: { flex: 1, flexDirection: 'row', paddingHorizontal: 10, paddingBottom: 10, gap: 10 },
+  appTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: RED_DARK,
+    letterSpacing: 0.5,
+  },
+
+  appTitleAccent: {
+    fontSize: 18,
+    color: WHITE,
+  },
+  glassPanel: {
+  borderRadius: 24,
+  overflow: 'hidden',
+
+  borderWidth: 1,
+  borderColor: 'rgba(255,255,255,0.18)',
+
+  backgroundColor: 'rgba(255,255,255,0.07)',
+},
+backgroundGlow1: {
+  position: 'absolute',
+  width: 400,
+  height: 400,
+  borderRadius: 200,
+  backgroundColor: 'rgba(251,111,106,0.15)',
+  top: -150,
+  left: -100,
+},
+
+backgroundGlow2: {
+  position: 'absolute',
+  width: 350,
+  height: 350,
+  borderRadius: 175,
+  backgroundColor: 'rgba(251,111,106,0.10)',
+  bottom: -100,
+  right: -80,
+},
+  // =========================================================
+  // MAIN ROW
+  // =========================================================
+
+  mainRow: {
+    flex: 1,
+    flexDirection: 'row',
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    gap: 14,
+    backgroundColor: 'transparent',
+  },
+
+  // =========================================================
+  // GLASS PANELS
+  // =========================================================
 
   panel: {
-    backgroundColor: CARD,
-    borderRadius: 22,
+    backgroundColor: GLASS,
+    borderRadius: 24,
     overflow: 'hidden',
-  },
-  panelBordered: {
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
+
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
   },
 
-  // Chat list
-  listPanel: { flex: 1.1, padding: 12, marginTop: 20 },
+  panelBordered: {
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 18,
+    shadowOffset: {
+      width: 0,
+      height: 8,
+    },
+    elevation: 8,
+  },
+
+  // =========================================================
+  // CHAT LIST
+  // =========================================================
+
+  listPanel: {
+    flex: 1.05,
+    padding: 14,
+    marginTop: 0,
+    marginBottom: 0,
+  },
+
   searchBar: {
+    height: 48,
+
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F4EDEA',
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    marginBottom: 10,
+
+    backgroundColor: GLASS_LIGHT,
+
+    borderRadius: 15,
+
+    paddingHorizontal: 14,
+
+    marginBottom: 14,
+
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
   },
-  searchInput: { flex: 1, color: TEXT_DARK, fontSize: 14 },
+
+  searchInput: {
+    flex: 1,
+
+    color: WHITE,
+
+    fontSize: 14,
+
+    marginLeft: 5,
+  },
+
   contactRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 14,
+
+    paddingVertical: 13,
+    paddingHorizontal: 10,
+
+    borderRadius: 17,
+
+    marginBottom: 5,
   },
-  contactRowActive: { backgroundColor: RED },
-  avatar: { width: 46, height: 46, borderRadius: 23 },
+
+  // PINK ACTIVE CHAT
+  contactRowActive: {
+    backgroundColor: RED_DARK,
+
+    shadowColor: RED_DARK,
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+
+  avatar: {
+    width: 48,
+    height: 48,
+
+    borderRadius: 24,
+
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+
   onlineDot: {
     position: 'absolute',
+
     right: 0,
     bottom: 0,
+
     width: 12,
     height: 12,
+
     borderRadius: 6,
-    backgroundColor: '#3DDC84',
+
+    backgroundColor: ONLINE,
+
     borderWidth: 2,
-    borderColor: '#fff',
+    borderColor: '#17181E',
   },
-  contactName: { fontSize: 14.5, fontWeight: '700', color: TEXT_DARK, flexShrink: 1 },
-  contactTime: { fontSize: 11, color: TEXT_MUTED },
-  contactPreview: { fontSize: 12.5, color: TEXT_MUTED, flexShrink: 1, marginRight: 6 },
+
+  contactName: {
+    fontSize: 14.5,
+
+    fontWeight: '700',
+
+    color: WHITE,
+
+    flexShrink: 1,
+  },
+
+  contactTime: {
+    fontSize: 10.5,
+
+    color: 'rgba(255,255,255,0.45)',
+  },
+
+  contactPreview: {
+    fontSize: 12,
+
+    color: 'rgba(255,255,255,0.55)',
+
+    flexShrink: 1,
+
+    marginRight: 6,
+
+    marginTop: 3,
+  },
+
   unreadBadge: {
-    minWidth: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: RED,
+    minWidth: 21,
+    height: 21,
+
+    borderRadius: 11,
+
+    backgroundColor: RED_DARK,
+
     alignItems: 'center',
     justifyContent: 'center',
+
     paddingHorizontal: 5,
   },
-  unreadBadgeText: { color: '#fff', fontSize: 11, fontWeight: '700' },
-  separator: { height: 1, backgroundColor: '#F0E6E2', marginVertical: 2 },
 
-  // Conversation
-  chatPanel: { flex: 2, marginTop: 20, flexDirection: 'column', justifyContent: 'space-between' },
-  chatHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1E7E3',
+  unreadBadgeText: {
+    color: WHITE,
+
+    fontSize: 10.5,
+
+    fontWeight: '800',
   },
-  headerAvatar: { width: 42, height: 42, borderRadius: 21 },
-  headerName: { fontSize: 15.5, fontWeight: '800', color: TEXT_DARK },
-  headerOnlineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#3DDC84', marginLeft: 6 },
-  headerStatus: { fontSize: 12, color: TEXT_MUTED, marginTop: 1 },
+
+  separator: {
+    height: 1,
+
+    backgroundColor: 'rgba(255,255,255,0.05)',
+
+    marginVertical: 3,
+  },
+
+  // =========================================================
+  // CHAT PANEL
+  // =========================================================
+
+  chatPanel: {
+    flex: 2,
+
+    marginTop: 0,
+
+    flexDirection: 'column',
+
+    justifyContent: 'space-between',
+
+    backgroundColor: 'rgba(255,255,255,0.055)',
+  },
+
+  // =========================================================
+  // CHAT HEADER
+  // =========================================================
+
+  chatHeader: {
+    minHeight: 76,
+
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+
+    borderBottomWidth: 1,
+
+    borderBottomColor: GLASS_BORDER,
+
+    backgroundColor: 'rgba(255,255,255,0.045)',
+  },
+
+  headerAvatar: {
+    width: 46,
+    height: 46,
+
+    borderRadius: 23,
+
+    borderWidth: 2,
+
+    borderColor: 'rgba(251,111,106,0.7)',
+  },
+
+  headerName: {
+    fontSize: 16,
+
+    fontWeight: '800',
+
+    color: WHITE,
+  },
+
+  headerOnlineDot: {
+    width: 8,
+    height: 8,
+
+    borderRadius: 4,
+
+    backgroundColor: ONLINE,
+
+    marginLeft: 7,
+
+    shadowColor: ONLINE,
+    shadowOpacity: 0.8,
+    shadowRadius: 5,
+  },
+
+  headerStatus: {
+    fontSize: 11.5,
+
+    color: 'rgba(255,255,255,0.55)',
+
+    marginTop: 3,
+  },
+
   headerIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#FBEDEA',
+    width: 40,
+    height: 40,
+
+    borderRadius: 20,
+
+    backgroundColor: 'rgba(251,111,106,0.14)',
+
     alignItems: 'center',
     justifyContent: 'center',
+
     marginLeft: 8,
+
+    borderWidth: 1,
+
+    borderColor: 'rgba(251,111,106,0.25)',
   },
 
-  blockedBanner: { backgroundColor: '#FFECEC', paddingVertical: 8, paddingHorizontal: 14 },
-  blockedBannerText: { color: '#C0392B', fontSize: 12.5 },
+  // =========================================================
+  // BLOCKED
+  // =========================================================
 
-  msgRow: { flexDirection: 'row', marginBottom: 14, alignItems: 'flex-end' },
-  msgRowMine: { justifyContent: 'flex-end' },
-  msgRowTheirs: { justifyContent: 'flex-start' },
-  msgAvatar: { width: 30, height: 30, borderRadius: 15, marginRight: 8 },
-  bubble: { borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10 },
-  bubbleMine: { backgroundColor: RED, borderBottomRightRadius: 4 },
-  bubbleTheirs: { backgroundColor: '#F1EAE7', borderBottomLeftRadius: 4 },
-  bubbleTextMine: { color: '#fff', fontSize: 14.5, lineHeight: 20 },
-  bubbleTextTheirs: { color: TEXT_DARK, fontSize: 14.5, lineHeight: 20 },
-  msgMetaRow: { flexDirection: 'row', marginTop: 3, paddingHorizontal: 2 },
-  msgTime: { fontSize: 10.5, color: TEXT_MUTED },
-  ticks: { fontSize: 10.5, color: '#4FC3F7' },
-  msgImage: { width: 190, height: 130, borderRadius: 12 },
+  blockedBanner: {
+    backgroundColor: 'rgba(251,111,106,0.15)',
 
-  locationCard: { flexDirection: 'row', alignItems: 'center', minWidth: 180 },
+    paddingVertical: 9,
+
+    paddingHorizontal: 16,
+
+    borderBottomWidth: 1,
+
+    borderBottomColor: 'rgba(251,111,106,0.25)',
+  },
+
+  blockedBannerText: {
+    color: '#ffaaa5',
+
+    fontSize: 12.5,
+  },
+
+  // =========================================================
+  // MESSAGES
+  // =========================================================
+
+  msgRow: {
+    flexDirection: 'row',
+
+    marginBottom: 17,
+
+    alignItems: 'flex-end',
+  },
+
+  msgRowMine: {
+    justifyContent: 'flex-end',
+  },
+
+  msgRowTheirs: {
+    justifyContent: 'flex-start',
+  },
+
+  msgAvatar: {
+    width: 32,
+    height: 32,
+
+    borderRadius: 16,
+
+    marginRight: 9,
+
+    borderWidth: 1,
+
+    borderColor: GLASS_BORDER,
+  },
+
+  bubble: {
+    borderRadius: 20,
+
+    paddingHorizontal: 16,
+
+    paddingVertical: 12,
+
+    maxWidth: '100%',
+  },
+
+  // YOUR MESSAGE
+  bubbleMine: {
+    backgroundColor: RED_DARK,
+
+    borderBottomRightRadius: 5,
+
+    shadowColor: RED_DARK,
+
+    shadowOpacity: 0.25,
+
+    shadowRadius: 10,
+
+    elevation: 4,
+  },
+
+  // OTHER RIDER
+  bubbleTheirs: {
+    backgroundColor: 'rgba(255,255,255,0.10)',
+
+    borderBottomLeftRadius: 5,
+
+    borderWidth: 1,
+
+    borderColor: GLASS_BORDER,
+  },
+
+  bubbleTextMine: {
+    color: WHITE,
+
+    fontSize: 14,
+
+    lineHeight: 20,
+  },
+
+  bubbleTextTheirs: {
+    color: WHITE,
+
+    fontSize: 14,
+
+    lineHeight: 20,
+  },
+
+  msgMetaRow: {
+    flexDirection: 'row',
+
+    marginTop: 4,
+
+    paddingHorizontal: 3,
+  },
+
+  msgTime: {
+    fontSize: 10,
+
+    color: 'rgba(255,255,255,0.42)',
+  },
+
+  ticks: {
+    fontSize: 10,
+
+    color: RED_DARK,
+
+    fontWeight: '700',
+  },
+
+  // =========================================================
+  // IMAGE MESSAGE
+  // =========================================================
+
+  msgImage: {
+    width: 190,
+
+    height: 130,
+
+    borderRadius: 14,
+  },
+
+  // =========================================================
+  // LOCATION
+  // =========================================================
+
+  locationCard: {
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    minWidth: 200,
+
+    padding: 3,
+  },
+
   locationMapPreview: {
-    width: 44, height: 44, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.25)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  fileCard: { flexDirection: 'row', alignItems: 'center', minWidth: 180 },
+    width: 48,
+    height: 48,
 
-  audioRow: { flexDirection: 'row', alignItems: 'center', minWidth: 170 },
-  playBtn: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  playBtnMine: { backgroundColor: 'rgba(255,255,255,0.25)' },
-  playBtnTheirs: { backgroundColor: '#fff' },
-  waveTrack: { flex: 1, height: 4, backgroundColor: 'rgba(0,0,0,0.12)', borderRadius: 2, marginHorizontal: 8, overflow: 'hidden' },
-  waveFill: { height: 4, borderRadius: 2 },
+    borderRadius: 13,
+
+    backgroundColor: 'rgba(251,111,106,0.22)',
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    borderWidth: 1,
+
+    borderColor: 'rgba(251,111,106,0.35)',
+  },
+
+  // =========================================================
+  // FILE
+  // =========================================================
+
+  fileCard: {
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    minWidth: 190,
+
+    padding: 3,
+  },
+
+  // =========================================================
+  // AUDIO
+  // =========================================================
+
+  audioRow: {
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    minWidth: 190,
+  },
+
+  playBtn: {
+    width: 34,
+    height: 34,
+
+    borderRadius: 17,
+
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  playBtnMine: {
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  },
+
+  playBtnTheirs: {
+    backgroundColor: RED_DARK,
+  },
+
+  waveTrack: {
+    flex: 1,
+
+    height: 4,
+
+    backgroundColor: 'rgba(255,255,255,0.18)',
+
+    borderRadius: 2,
+
+    marginHorizontal: 9,
+
+    overflow: 'hidden',
+  },
+
+  waveFill: {
+    height: 4,
+
+    borderRadius: 2,
+
+    backgroundColor: WHITE,
+  },
+
+  // =========================================================
+  // RECORDING
+  // =========================================================
 
   recordingBar: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8,
-    backgroundColor: '#FFF3F0',
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    paddingHorizontal: 16,
+
+    paddingVertical: 9,
+
+    backgroundColor: 'rgba(251,111,106,0.14)',
+
+    borderTopWidth: 1,
+
+    borderTopColor: GLASS_BORDER,
   },
-  recDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#E5484D', marginRight: 8 },
-  recordingText: { flex: 1, color: '#C0392B', fontWeight: '600' },
-  recordStopBtn: { backgroundColor: RED, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
+
+  recDot: {
+    width: 10,
+    height: 10,
+
+    borderRadius: 5,
+
+    backgroundColor: RED_DARK,
+
+    marginRight: 8,
+  },
+
+  recordingText: {
+    flex: 1,
+
+    color: '#ffaaa5',
+
+    fontWeight: '600',
+  },
+
+  recordStopBtn: {
+    backgroundColor: RED_DARK,
+
+    paddingHorizontal: 13,
+
+    paddingVertical: 7,
+
+    borderRadius: 12,
+  },
+
+  // =========================================================
+  // MESSAGE INPUT
+  // =========================================================
 
   inputBar: {
     flexDirection: 'row',
+
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+
+    paddingHorizontal: 14,
+
+    paddingVertical: 12,
+
     borderTopWidth: 1,
-    borderTopColor: '#F1E7E3',
+
+    borderTopColor: GLASS_BORDER,
+
+    backgroundColor: 'rgba(255,255,255,0.045)',
   },
+
   plusBtn: {
-    width: 38, height: 38, borderRadius: 19, backgroundColor: RED,
-    alignItems: 'center', justifyContent: 'center', marginRight: 8,
+    width: 42,
+    height: 42,
+
+    borderRadius: 21,
+
+    backgroundColor: RED_DARK,
+
+    alignItems: 'center',
+    justifyContent: 'center',
+
+    marginRight: 9,
+
+    shadowColor: RED_DARK,
+
+    shadowOpacity: 0.3,
+
+    shadowRadius: 8,
+
+    elevation: 4,
   },
+
   textInput: {
-    flex: 1, backgroundColor: '#F4EDEA', borderRadius: 20, paddingHorizontal: 14,
-    paddingVertical: 8, maxHeight: 90, color: TEXT_DARK, fontSize: 14,
+    flex: 1,
+
+    backgroundColor: 'rgba(255,255,255,0.09)',
+
+    borderRadius: 23,
+
+    paddingHorizontal: 17,
+
+    paddingVertical: 9,
+
+    maxHeight: 90,
+
+    color: WHITE,
+
+    fontSize: 14,
+
+    borderWidth: 1,
+
+    borderColor: GLASS_BORDER,
   },
-  inputIconBtn: { paddingHorizontal: 6, marginLeft: 4 },
+
+  inputIconBtn: {
+    width: 38,
+    height: 38,
+
+    alignItems: 'center',
+    justifyContent: 'center',
+
+    marginLeft: 4,
+
+    borderRadius: 19,
+
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+
   sendBtn: {
-    width: 38, height: 38, borderRadius: 19, backgroundColor: RED,
-    alignItems: 'center', justifyContent: 'center', marginLeft: 6,
+    width: 42,
+    height: 42,
+
+    borderRadius: 21,
+
+    backgroundColor: RED_DARK,
+
+    alignItems: 'center',
+    justifyContent: 'center',
+
+    marginLeft: 7,
+
+    shadowColor: RED_DARK,
+
+    shadowOpacity: 0.35,
+
+    shadowRadius: 8,
+
+    elevation: 5,
   },
 
-  emptyState: { alignItems: 'center', justifyContent: 'center', flex: 2 },
-  emptyStateText: { color: TEXT_MUTED, marginTop: 8, fontSize: 14 },
+  // =========================================================
+  // EMPTY CHAT
+  // =========================================================
 
-  // Profile panel
-  profilePanel: { flex: 0.85, padding: 18, marginTop: 20, flexDirection: 'column', justifyContent: 'space-between' },
-  profileTitle: { fontSize: 17, fontWeight: '800', color: TEXT_DARK },
-  profileAvatar: { width: 96, height: 96, borderRadius: 48, marginTop: 10, borderWidth: 3, borderColor: '#fff' },
+  emptyState: {
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    flex: 2,
+
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+
+  emptyStateText: {
+    color: 'rgba(255,255,255,0.50)',
+
+    marginTop: 10,
+
+    fontSize: 14,
+  },
+
+  // =========================================================
+  // RIGHT PROFILE PANEL
+  // =========================================================
+
+  profilePanel: {
+    flex: 0.85,
+
+    padding: 20,
+
+    marginTop: 0,
+
+    flexDirection: 'column',
+
+    justifyContent: 'space-between',
+
+    backgroundColor: 'rgba(255,255,255,0.065)',
+  },
+
+  profileTitle: {
+    fontSize: 16,
+
+    fontWeight: '800',
+
+    color: WHITE,
+  },
+
+  profileAvatar: {
+    width: 105,
+    height: 105,
+
+    borderRadius: 53,
+
+    marginTop: 12,
+
+    borderWidth: 3,
+
+    borderColor: RED_DARK,
+
+    alignSelf: 'center',
+  },
+
   profileOnlineDot: {
-    position: 'absolute', right: 4, bottom: 4, width: 16, height: 16, borderRadius: 8,
-    backgroundColor: '#3DDC84', borderWidth: 3, borderColor: '#fff',
+    position: 'absolute',
+
+    right: 4,
+    bottom: 4,
+
+    width: 17,
+    height: 17,
+
+    borderRadius: 9,
+
+    backgroundColor: ONLINE,
+
+    borderWidth: 3,
+
+    borderColor: '#17181E',
   },
-  profileName: { fontSize: 16.5, fontWeight: '800', color: TEXT_DARK, marginTop: 10 },
-  profileRole: { fontSize: 13, color: TEXT_MUTED, marginTop: 2 },
+
+  profileName: {
+    fontSize: 18,
+
+    fontWeight: '800',
+
+    color: WHITE,
+
+    marginTop: 12,
+
+    textAlign: 'center',
+  },
+
+  profileRole: {
+    fontSize: 12.5,
+
+    color: TEXT_MUTED,
+
+    marginTop: 3,
+
+    textAlign: 'center',
+  },
+
   viewProfileBtn: {
-    backgroundColor: RED, paddingHorizontal: 18, paddingVertical: 9, borderRadius: 16, marginTop: 12,
+    backgroundColor: RED_DARK,
+
+    paddingHorizontal: 20,
+
+    paddingVertical: 10,
+
+    borderRadius: 17,
+
+    marginTop: 13,
+
+    alignSelf: 'center',
+
+    shadowColor: RED_DARK,
+
+    shadowOpacity: 0.3,
+
+    shadowRadius: 8,
+
+    elevation: 4,
   },
-  divider: { height: 1, backgroundColor: '#F1E7E3', marginVertical: 18 },
-  quickActionsTitle: { fontSize: 13, fontWeight: '700', color: TEXT_MUTED, marginBottom: 10 },
+
+  divider: {
+    height: 1,
+
+    backgroundColor: GLASS_BORDER,
+
+    marginVertical: 20,
+  },
+
+  quickActionsTitle: {
+    fontSize: 12,
+
+    fontWeight: '700',
+
+    color: 'rgba(255,255,255,0.45)',
+
+    marginBottom: 10,
+
+    textTransform: 'uppercase',
+
+    letterSpacing: 1,
+  },
+
   quickAction: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: '#F7F1EE',
-    borderRadius: 14, paddingVertical: 12, paddingHorizontal: 12, marginBottom: 10,
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    backgroundColor: 'rgba(255,255,255,0.07)',
+
+    borderRadius: 15,
+
+    paddingVertical: 12,
+
+    paddingHorizontal: 13,
+
+    marginBottom: 10,
+
+    borderWidth: 1,
+
+    borderColor: GLASS_BORDER,
   },
-  quickActionIcon: { fontSize: 16, marginRight: 10 },
-  quickActionText: { fontSize: 13.5, color: TEXT_DARK, fontWeight: '600' },
-  brandFooter: { fontSize: 12.5, color: RED_DARK, fontWeight: '700', marginTop: 4 },
 
-  // Modals
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
-  sheetCard: { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20 },
-  sheetTitle: { fontSize: 16, fontWeight: '800', color: TEXT_DARK, marginBottom: 14, textAlign: 'center' },
-  sheetGrid: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 10 },
-  attachOption: { alignItems: 'center' },
-  attachIconWrap: { width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center' },
-  attachLabel: { marginTop: 8, fontSize: 12.5, color: TEXT_DARK, fontWeight: '600' },
-  closeModalBtn: { alignItems: 'center', paddingVertical: 12, marginTop: 6 },
-  closeModalBtnLight: { position: 'absolute', top: 50, right: 20, padding: 10 },
+  quickActionIcon: {
+    fontSize: 17,
 
-  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  photoThumb: { width: 100, height: 80, borderRadius: 10, marginBottom: 10 },
+    marginRight: 11,
+  },
 
-  fileRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F1E7E3' },
+  quickActionText: {
+    fontSize: 13,
 
-  emojiCard: { position: 'absolute', bottom: 90, alignSelf: 'center', backgroundColor: '#fff', borderRadius: 20, padding: 16, width: '88%' },
-  emojiGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-  emojiCell: { width: '16.6%', alignItems: 'center', paddingVertical: 8 },
+    color: WHITE,
+
+    fontWeight: '600',
+  },
+
+  brandFooter: {
+    fontSize: 12,
+
+    color: RED_DARK,
+
+    fontWeight: '800',
+
+    marginTop: 5,
+
+    textAlign: 'center',
+  },
+
+  // =========================================================
+  // MODALS
+  // =========================================================
+
+  modalBackdrop: {
+    flex: 1,
+
+    backgroundColor: 'rgba(0,0,0,0.65)',
+
+    justifyContent: 'flex-end',
+  },
+
+  sheetCard: {
+    backgroundColor: '#1B1C23',
+
+    borderTopLeftRadius: 26,
+
+    borderTopRightRadius: 26,
+
+    padding: 20,
+
+    borderWidth: 1,
+
+    borderColor: GLASS_BORDER,
+  },
+
+  sheetTitle: {
+    fontSize: 16,
+
+    fontWeight: '800',
+
+    color: WHITE,
+
+    marginBottom: 14,
+
+    textAlign: 'center',
+  },
+
+  sheetGrid: {
+    flexDirection: 'row',
+
+    justifyContent: 'space-around',
+
+    marginBottom: 10,
+  },
+
+  attachOption: {
+    alignItems: 'center',
+  },
+
+  attachIconWrap: {
+    width: 58,
+    height: 58,
+
+    borderRadius: 29,
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    backgroundColor: 'rgba(251,111,106,0.16)',
+
+    borderWidth: 1,
+
+    borderColor: 'rgba(251,111,106,0.3)',
+  },
+
+  attachLabel: {
+    marginTop: 8,
+
+    fontSize: 12.5,
+
+    color: WHITE,
+
+    fontWeight: '600',
+  },
+
+  closeModalBtn: {
+    alignItems: 'center',
+
+    paddingVertical: 12,
+
+    marginTop: 6,
+  },
+
+  closeModalBtnLight: {
+    position: 'absolute',
+
+    top: 50,
+
+    right: 20,
+
+    padding: 10,
+  },
+
+  // =========================================================
+  // PHOTO / FILE / EMOJI
+  // =========================================================
+
+  photoGrid: {
+    flexDirection: 'row',
+
+    flexWrap: 'wrap',
+
+    justifyContent: 'space-between',
+  },
+
+  photoThumb: {
+    width: 100,
+
+    height: 80,
+
+    borderRadius: 12,
+
+    marginBottom: 10,
+  },
+
+  fileRow: {
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    paddingVertical: 10,
+
+    borderBottomWidth: 1,
+
+    borderBottomColor: GLASS_BORDER,
+  },
+
+  emojiCard: {
+    position: 'absolute',
+
+    bottom: 90,
+
+    alignSelf: 'center',
+
+    backgroundColor: '#1B1C23',
+
+    borderRadius: 22,
+
+    padding: 16,
+
+    width: '88%',
+
+    borderWidth: 1,
+
+    borderColor: GLASS_BORDER,
+  },
+
+  emojiGrid: {
+    flexDirection: 'row',
+
+    flexWrap: 'wrap',
+  },
+
+  emojiCell: {
+    width: '16.6%',
+
+    alignItems: 'center',
+
+    paddingVertical: 8,
+  },
+
+  // =========================================================
+  // MORE MENU
+  // =========================================================
 
   menuCard: {
-    position: 'absolute', top: 100, right: 20, backgroundColor: '#fff', borderRadius: 16, paddingVertical: 6,
-    width: 210, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10, elevation: 6,
-  },
-  menuItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11 },
-  menuItemText: { fontSize: 13.5, color: TEXT_DARK, fontWeight: '600' },
+    position: 'absolute',
 
-  profileModalCard: { backgroundColor: 'transparent', paddingHorizontal: 12, paddingBottom: 12 },
+    top: 100,
+
+    right: 20,
+
+    backgroundColor: '#1B1C23',
+
+    borderRadius: 17,
+
+    paddingVertical: 6,
+
+    width: 215,
+
+    shadowColor: '#000',
+
+    shadowOpacity: 0.35,
+
+    shadowRadius: 15,
+
+    elevation: 10,
+
+    borderWidth: 1,
+
+    borderColor: GLASS_BORDER,
+  },
+
+  menuItem: {
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    paddingHorizontal: 14,
+
+    paddingVertical: 12,
+  },
+
+  menuItemText: {
+    fontSize: 13.5,
+
+    color: WHITE,
+
+    fontWeight: '600',
+  },
+
+  // =========================================================
+  // PROFILE MODAL
+  // =========================================================
+
+  profileModalCard: {
+    backgroundColor: 'transparent',
+
+    paddingHorizontal: 12,
+
+    paddingBottom: 12,
+  },
+
   detailCard: {
-    alignSelf: 'center', backgroundColor: '#fff', borderRadius: 22, padding: 24, width: '84%', alignItems: 'center',
-    marginTop: 'auto', marginBottom: 'auto',
+    alignSelf: 'center',
+
+    backgroundColor: '#1B1C23',
+
+    borderRadius: 24,
+
+    padding: 24,
+
+    width: '84%',
+
+    alignItems: 'center',
+
+    marginTop: 'auto',
+
+    marginBottom: 'auto',
+
+    borderWidth: 1,
+
+    borderColor: GLASS_BORDER,
   },
-  detailAvatar: { width: 90, height: 90, borderRadius: 45 },
-  detailName: { fontSize: 17, fontWeight: '800', color: TEXT_DARK, marginTop: 10 },
-  detailRole: { fontSize: 13, color: TEXT_MUTED, marginBottom: 14 },
-  detailRow: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#F1E7E3' },
-  detailLabel: { color: TEXT_MUTED, fontSize: 13 },
-  detailValue: { color: TEXT_DARK, fontSize: 13, fontWeight: '700' },
 
-  imageViewerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', alignItems: 'center', justifyContent: 'center' },
-  fullImage: { width: '92%', height: '70%' },
+  detailAvatar: {
+    width: 90,
+    height: 90,
 
-  callBackdrop: { flex: 1, backgroundColor: '#2A2220', alignItems: 'center', justifyContent: 'center' },
-  callLabel: { color: '#ffd8d0', fontSize: 14, marginBottom: 18, letterSpacing: 1 },
-  callAvatar: { width: 130, height: 130, borderRadius: 65, borderWidth: 4, borderColor: RED },
-  callName: { color: '#fff', fontSize: 22, fontWeight: '800', marginTop: 18 },
-  callSub: { color: '#cbb9b5', fontSize: 13, marginTop: 4 },
+    borderRadius: 45,
+
+    borderWidth: 3,
+
+    borderColor: RED_DARK,
+  },
+
+  detailName: {
+    fontSize: 18,
+
+    fontWeight: '800',
+
+    color: WHITE,
+
+    marginTop: 10,
+  },
+
+  detailRole: {
+    fontSize: 13,
+
+    color: TEXT_MUTED,
+
+    marginBottom: 14,
+  },
+
+  detailRow: {
+    flexDirection: 'row',
+
+    justifyContent: 'space-between',
+
+    width: '100%',
+
+    paddingVertical: 9,
+
+    borderTopWidth: 1,
+
+    borderTopColor: GLASS_BORDER,
+  },
+
+  detailLabel: {
+    color: TEXT_MUTED,
+
+    fontSize: 13,
+  },
+
+  detailValue: {
+    color: WHITE,
+
+    fontSize: 13,
+
+    fontWeight: '700',
+  },
+
+  // =========================================================
+  // IMAGE VIEWER
+  // =========================================================
+
+  imageViewerBackdrop: {
+    flex: 1,
+
+    backgroundColor: 'rgba(0,0,0,0.92)',
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+  },
+
+  fullImage: {
+    width: '92%',
+
+    height: '70%',
+  },
+
+  // =========================================================
+  // CALL SCREEN
+  // =========================================================
+
+  callBackdrop: {
+    flex: 1,
+
+    backgroundColor: '#101116',
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+  },
+
+  callLabel: {
+    color: '#ffaaa5',
+
+    fontSize: 14,
+
+    marginBottom: 18,
+
+    letterSpacing: 1,
+  },
+
+  callAvatar: {
+    width: 130,
+    height: 130,
+
+    borderRadius: 65,
+
+    borderWidth: 4,
+
+    borderColor: RED_DARK,
+  },
+
+  callName: {
+    color: WHITE,
+
+    fontSize: 22,
+
+    fontWeight: '800',
+
+    marginTop: 18,
+  },
+
+  callSub: {
+    color: TEXT_MUTED,
+
+    fontSize: 13,
+
+    marginTop: 4,
+  },
+
   endCallBtn: {
-    width: 66, height: 66, borderRadius: 33, backgroundColor: '#E5484D', alignItems: 'center', justifyContent: 'center',
-    marginTop: 46, transform: [{ rotate: '135deg' }],
+    width: 66,
+    height: 66,
+
+    borderRadius: 33,
+
+    backgroundColor: '#E5484D',
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    marginTop: 46,
+
+    transform: [{ rotate: '135deg' }],
   },
-  endCallLabel: { color: '#cbb9b5', marginTop: 10, fontSize: 12 },
+
+  endCallLabel: {
+    color: TEXT_MUTED,
+
+    marginTop: 10,
+
+    fontSize: 12,
+  },
+
+  // =========================================================
+  // TOAST
+  // =========================================================
 
   toast: {
-    position: 'absolute', bottom: 24, alignSelf: 'center', backgroundColor: 'rgba(30,24,22,0.92)',
-    paddingHorizontal: 18, paddingVertical: 10, borderRadius: 20,
+    position: 'absolute',
+
+    bottom: 24,
+
+    alignSelf: 'center',
+
+    backgroundColor: 'rgba(25,25,30,0.94)',
+
+    paddingHorizontal: 18,
+
+    paddingVertical: 10,
+
+    borderRadius: 20,
+
+    borderWidth: 1,
+
+    borderColor: GLASS_BORDER,
   },
-  toastText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+
+  toastText: {
+    color: WHITE,
+
+    fontSize: 13,
+
+    fontWeight: '600',
+  },
+
 });

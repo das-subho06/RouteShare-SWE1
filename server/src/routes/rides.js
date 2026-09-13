@@ -13,7 +13,7 @@ router.get('/history/:userId', async (req, res) => {
        LEFT JOIN users u ON u.id = r.driver_id
        LEFT JOIN driver_rating dr ON dr.ride_id = r.id
        WHERE (r.rider_id = $1 OR r.driver_id = $1)
-         AND r.status IN ('completed', 'cancelled')
+         AND r.status = 'completed'
        ORDER BY r.requested_at DESC
        LIMIT 50`,
       [userId]
@@ -47,5 +47,47 @@ router.get('/active/:userId', async (req, res) => {
     res.status(500).json({ error: 'Could not fetch active ride.' });
   }
 });
+router.get('/pending/:driverId', async (req, res) => {
+  const { driverId } = req.params;
+  try {
+    const driverRes = await pool.query(
+      `SELECT seats FROM driver_profiles WHERE user_id = $1`,
+      [driverId]
+    );
+    const seats = driverRes.rows[0]?.seats;
+    if (!seats) return res.json([]);
 
+    const result = await pool.query(
+  `SELECT r.*, u.name AS rider_name
+   FROM rides r
+   JOIN users u ON u.id = r.rider_id
+   WHERE r.status = 'requested' AND r.seats_requested <= $1
+     AND r.pickup_label <> '' AND r.destination_label <> ''
+     AND NOT ($2 = ANY(r.excluded_driver_ids))
+   ORDER BY r.requested_at DESC`,
+  [seats, Number(driverId)]
+);
+
+    const requests = result.rows.map((row) => ({
+      id: String(row.id),
+      riderId: row.rider_id,
+      riderName: row.rider_name,
+      pickup: row.pickup_label,
+      destination: row.destination_label,
+      pickupCoords: { latitude: row.pickup_lat, longitude: row.pickup_lng },
+      destinationCoords: { latitude: row.destination_lat, longitude: row.destination_lng },
+      distance: `${row.distance_km} km`,
+      time: `${row.duration_minutes} min`,
+      price: row.price,
+      carType: row.ride_class,
+      requestedSeats: row.seats_requested,
+      rideCode: row.ride_code,
+    }));
+
+    res.json(requests);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not fetch pending requests.' });
+  }
+});
 module.exports = router;

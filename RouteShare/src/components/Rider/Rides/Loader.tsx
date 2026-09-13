@@ -136,26 +136,25 @@ export default function Loader({
 
   // Guards against onComplete firing after the user already cancelled,
   // and against double-firing if minDurationMs is very small.
-  const settledRef = useRef(false);
+  const completedRef = useRef(false);
+const cancelledRef = useRef(false);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (!settledRef.current) {
-        settledRef.current = true;
-        onComplete();
-      }
-    }, Math.max(minDurationMs, 0));
-    return () => clearTimeout(timer);
-    // Intentionally only runs once per mount — the search always runs for
-    // the same minimum duration regardless of prop identity changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+useEffect(() => {
+  const timer = setTimeout(() => {
+    if (!completedRef.current) {
+      completedRef.current = true;
+      onComplete();
+    }
+  }, Math.max(minDurationMs, 0));
+  return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
-  const handleCancel = () => {
-    if (settledRef.current) return;
-    settledRef.current = true;
-    onCancel();
-  };
+const handleCancel = () => {
+  if (cancelledRef.current) return;
+  cancelledRef.current = true;
+  onCancel();
+};
 
   const ringStyle = (v: Animated.Value) => ({
     opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] }),

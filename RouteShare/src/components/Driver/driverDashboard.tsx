@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, useWindowDimensions, Platform, ActivityIndicator, TextInput, Alert, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { API_URL } from './config';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getSocket } from './lib/socket';
+import { API_URL } from '../config';
+ import AsyncStorage from '../lib/storage';
+import { getSocket } from '../lib/socket';
 
 // ---------------------------------------------------------------------------
 // Theme Colors
@@ -92,6 +92,62 @@ function RouteMap({
 }) {
   const showDriver = !!driverLocation && !!showDriverRoute;
 
+  // Real, road-following geometry for each leg — straight-line coordinates
+  // only give an "as the crow flies" diagonal. Same OSRM public demo
+  // server used in Rider.tsx's map (free, no API key, but rate-limited —
+  // swap for Mapbox/Google Directions or a self-hosted OSRM in production).
+  // Two separate fetches because these are two independent legs: the ride
+  // itself (pickup → destination) and the driver's approach (driver's
+  // current location → pickup).
+  const [rideRouteCoords, setRideRouteCoords] = useState<Place[]>([]);
+  const [driverRouteCoords, setDriverRouteCoords] = useState<Place[]>([]);
+
+  const fetchRoute = async (from: Place, to: Place): Promise<Place[]> => {
+    try {
+      const url =
+        `https://router.project-osrm.org/route/v1/driving/` +
+        `${from.longitude},${from.latitude};${to.longitude},${to.latitude}` +
+        `?overview=full&geometries=geojson`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const coords = data?.routes?.[0]?.geometry?.coordinates;
+      if (Array.isArray(coords) && coords.length > 0) {
+        // GeoJSON gives [lng, lat] — flip to {latitude, longitude}.
+        return coords.map(([lng, lat]: [number, number]) => ({ label: "", latitude: lat, longitude: lng }));
+      }
+    } catch (err) {
+      console.error("Failed to fetch route geometry, falling back to straight line", err);
+    }
+    return []; // empty = caller falls back to a straight line
+  };
+
+  // Leg 1: the ride route (pickup → destination) — always shown.
+  useEffect(() => {
+    let cancelled = false;
+    fetchRoute(pickup, destination).then((coords) => {
+      if (!cancelled) setRideRouteCoords(coords);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pickup.latitude, pickup.longitude, destination.latitude, destination.longitude]);
+
+  // Leg 2: the driver's approach (driver's current location → pickup) —
+  // only relevant once a ride is accepted and we're actually showing it.
+  useEffect(() => {
+    if (!showDriver) {
+      setDriverRouteCoords([]);
+      return;
+    }
+    let cancelled = false;
+    fetchRoute(driverLocation as Place, pickup).then((coords) => {
+      if (!cancelled) setDriverRouteCoords(coords);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [showDriver, driverLocation?.latitude, driverLocation?.longitude, pickup.latitude, pickup.longitude]);
+
   if (Platform.OS === "web") {
     const centerLat = (pickup.latitude + destination.latitude) / 2;
     const centerLng = (pickup.longitude + destination.longitude) / 2;
@@ -108,10 +164,18 @@ function RouteMap({
         const pin = (color) => L.divIcon({className:'',html:'<div style="width:14px;height:14px;border-radius:7px;background:'+color+';border:2px solid white;"></div>'});
         L.marker([${pickup.latitude}, ${pickup.longitude}], {icon: pin('#2ECC71')}).addTo(map);
         L.marker([${destination.latitude}, ${destination.longitude}], {icon: pin('#FF5A52')}).addTo(map);
-        L.polyline([[${pickup.latitude},${pickup.longitude}],[${destination.latitude},${destination.longitude}]], {color:'#FF6659', weight:4}).addTo(map);
+        L.polyline(${JSON.stringify(
+          rideRouteCoords.length > 0
+            ? rideRouteCoords.map((c) => [c.latitude, c.longitude])
+            : [[pickup.latitude, pickup.longitude], [destination.latitude, destination.longitude]]
+        )}, {color:'#FF6659', weight:4}).addTo(map);
         ${showDriver ? `
         L.marker([${driverLocation!.latitude}, ${driverLocation!.longitude}], {icon: pin('#3B82F6')}).addTo(map);
-        L.polyline([[${driverLocation!.latitude},${driverLocation!.longitude}],[${pickup.latitude},${pickup.longitude}]], {color:'#3B82F6', weight:3, dashArray: '6,6'}).addTo(map);
+        L.polyline(${JSON.stringify(
+          driverRouteCoords.length > 0
+            ? driverRouteCoords.map((c) => [c.latitude, c.longitude])
+            : [[driverLocation!.latitude, driverLocation!.longitude], [pickup.latitude, pickup.longitude]]
+        )}, {color:'#3B82F6', weight:3, dashArray: '6,6'}).addTo(map);
         ` : ""}
       </script>
       </body></html>
@@ -129,13 +193,22 @@ function RouteMap({
     >
       <Marker coordinate={pickup}><View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: '#2ECC71', borderWidth: 3, borderColor: '#fff' }} /></Marker>
       <Marker coordinate={destination}><View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: '#FF5A52', borderWidth: 3, borderColor: '#fff' }} /></Marker>
-      <Polyline coordinates={[pickup, destination]} strokeColor="#FF6659" strokeWidth={4} />
+      <Polyline
+        coordinates={rideRouteCoords.length > 0 ? rideRouteCoords : [pickup, destination]}
+        strokeColor="#FF6659"
+        strokeWidth={4}
+      />
       {showDriver && (
         <>
           <Marker coordinate={driverLocation as Place}>
             <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: '#3B82F6', borderWidth: 3, borderColor: '#fff' }} />
           </Marker>
-          <Polyline coordinates={[driverLocation as Place, pickup]} strokeColor="#3B82F6" strokeWidth={3} lineDashPattern={[6, 6]} />
+          <Polyline
+            coordinates={driverRouteCoords.length > 0 ? driverRouteCoords : [driverLocation as Place, pickup]}
+            strokeColor="#3B82F6"
+            strokeWidth={3}
+            lineDashPattern={[6, 6]}
+          />
         </>
       )}
     </MapView>
@@ -166,7 +239,7 @@ export default function DriverDashboard() {
   const [chatVisible, setChatVisible] = useState(false);
 const [chatMessages, setChatMessages] = useState<{ id: string; text: string; sender: 'rider' | 'driver' }[]>([]);
 const chatPresets = ["I'm on my way", "I've arrived", "Running a few minutes late", "Okay, thanks"];
-
+const [cancelling, setCancelling] = useState(false);
 const sendChatMessage = (text: string) => {
   const trimmed = text.trim();
   if (!trimmed || !activeRide) return;
@@ -199,57 +272,96 @@ useEffect(() => {
   setChatMessages([]);
 }, [activeRide?.id]);
   useEffect(() => {
-    let socket: ReturnType<typeof getSocket>;
+    // Grab the (singleton) socket and define every handler SYNCHRONOUSLY,
+    // before any `await`. Previously `socket` and `registerOnline` were only
+    // assigned after `await AsyncStorage.getItem(...)`, which meant that if
+    // this effect ever ran twice in a row before that await resolved (React
+    // double-invoking effects in dev, Fast Refresh, a remount from
+    // navigation, etc.), the FIRST run's cleanup fired while `socket` was
+    // still undefined — `socket?.off(...)` silently did nothing — and the
+    // first run's async function then attached its listeners late, with no
+    // way left to ever remove them. That left duplicate 'incoming_request'
+    // listeners permanently stacked on the shared socket, so every ride
+    // request rendered twice. Using a stable `cancelled` flag + named
+    // handlers fixes this regardless of remount timing.
+    const socket = getSocket();
+    let uid: string | null = null;
+    let cancelled = false;
+
+    const syncPendingRequests = async () => {
+      if (!uid) return;
+      try {
+        const res = await fetch(`${API_URL}/rides/pending/${uid}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setRequests(data);
+      } catch (err) {
+        console.error('Failed to sync pending requests', err);
+      }
+    };
+
+  const registerOnline = () => {
+  if (!uid) return;
+  socket.emit('driver_online', { userId: uid });
+  syncPendingRequests();   // <-- full REST refetch, every single reconnect
+};
+
+
+
+    const handleIncoming = (req: any) => {
+      console.log('📩 incoming_request received:', req);
+      // Defensive de-dupe: never add the same request id twice, even if a
+      // duplicate event slips through.
+      setRequests((prev) => (prev.some((r) => String(r.id) === String(req.id)) ? prev : [req, ...prev]));
+    };
+
+    const handleUnavailable = ({ requestId }: any) => {
+      console.log('⚠️ ride_unavailable:', requestId);
+      setActiveRide((prev) => (prev && String(prev.id) === String(requestId) ? null : prev));
+      setReachedPickup(false);
+      setCodeInput('');
+      setCodeError('');
+      setCodeVerified(false);
+    };
+
+    const handleTaken = ({ id }: any) => {
+      console.log('🚫 request_taken, removing from list:', id);
+      setRequests((prev) => prev.filter((r) => String(r.id) !== String(id)));
+    };
+
+    socket.on('connect', registerOnline); // fires on first connect AND every reconnect
+    socket.on('incoming_request', handleIncoming);
+    socket.on('ride_unavailable', handleUnavailable);
+    socket.on('request_taken', handleTaken);
 
     (async () => {
-      const uid = await AsyncStorage.getItem('userId');
-      if (!uid) {
+      const storedUid = await AsyncStorage.getItem('userId');
+      if (cancelled) return;
+      if (!storedUid) {
         setLoadingProfile(false);   // stop the spinner even with no session
         return;
       }
-      setUserId(uid);
+      uid = storedUid;
+      setUserId(storedUid);
       try {
-        const res = await fetch(`${API_URL}/driver/driver-details/${uid}`);
+        const res = await fetch(`${API_URL}/driver/driver-details/${storedUid}`);
         const data = await res.json();
-        if (res.ok) setProfile(data);
+        if (!cancelled && res.ok) setProfile(data);
       } catch (err) {
         console.error('Failed to load driver profile', err);
       } finally {
-        setLoadingProfile(false);
+        if (!cancelled) setLoadingProfile(false);
       }
 
-      socket = getSocket();
-      const registerOnline = () => {
-  socket.emit('driver_online', { userId: uid });
-  console.log('🟢 driver_online emitted for userId:', uid, 'connected:', socket.connected);
-};
-if (socket.connected) {
-  registerOnline();
-} else {
-  socket.once('connect', registerOnline);
-}
-     socket.on('incoming_request', (req) => {
-        console.log('📩 incoming_request received:', req);
-        setRequests((prev) => [req, ...prev]);
-      });
-      socket.on('ride_unavailable', ({ requestId }: any) => {
-        console.log('⚠️ ride_unavailable:', requestId);
-        setActiveRide((prev) => (prev && String(prev.id) === String(requestId) ? null : prev));
-        setReachedPickup(false);
-        setCodeInput('');
-        setCodeError('');
-        setCodeVerified(false);
-      });
-      socket.on('request_taken', ({ id }: any) => {   // NEW
-  console.log('🚫 request_taken, removing from list:', id);
-  setRequests((prev) => prev.filter((r) => String(r.id) !== String(id)));
-});
+      if (socket.connected) registerOnline();
     })();
 
     return () => {
-      socket?.off('incoming_request');
-      socket?.off('ride_unavailable');
-      socket?.off('request_taken'); 
+      cancelled = true;
+      socket.off('connect', registerOnline);
+      socket.off('incoming_request', handleIncoming);
+      socket.off('ride_unavailable', handleUnavailable);
+      socket.off('request_taken', handleTaken);
     };
   }, []);
 
@@ -329,19 +441,23 @@ if (socket.connected) {
   );
 };
 
-  const handleDecline = (rideId: string) => {
+    const handleDecline = (rideId: string) => {
+    getSocket().emit('cancel_ride_request', { requestId: rideId });
     setRequests((prev) => prev.filter((r) => r.id !== rideId));
   };
+
    const performCancelRide = () => {
   if (!activeRide) return;
   if (!userId) {
     Alert.alert('Not ready yet', 'Your driver session is still loading — please wait a moment and try again.');
     return;
   }
+  setCancelling(true);
   getSocket().emit(
     'cancel_ride',
     { requestId: activeRide.id, driverUserId: userId, riderId: activeRide.riderId },
     (res: any) => {
+       setCancelling(false);
       if (res?.ok) {
         setActiveRide(null);
         setReachedPickup(false);

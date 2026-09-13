@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '../../lib/storage';
 import {
   View,
   Text,
@@ -11,7 +11,7 @@ import {
   SafeAreaView,
   Platform,
 } from 'react-native';
-import { API_URL } from './config';
+import { API_URL } from '../../config';
 import { useLocalSearchParams } from 'expo-router';
 import {useRouter} from 'expo-router';
 // -----------------------------------------------------------------------
@@ -29,8 +29,8 @@ const MAX_STARS = 5;
 
 export default function FeedbackForm() {
   const router = useRouter();
-   const { requestId, driverId, riderId } = useLocalSearchParams<{
-    requestId?: string; driverId?: string; riderId?: string;
+   const { requestId, driverId, riderId, riderName } = useLocalSearchParams<{
+    requestId?: string; driverId?: string; riderId?: string;riderName?: string
   }>();
   const [rating, setRating] = useState(0);
   const [description, setDescription] = useState('');
@@ -128,7 +128,7 @@ export default function FeedbackForm() {
     'Thank you!',
     `Your feedback has been submitted.\n\nRating: ${rating}/${MAX_STARS}`
   );
-  const name = (await AsyncStorage.getItem('name')) || '';
+   const name = (Array.isArray(riderName) ? riderName[0] : riderName) || '';
   router.replace({ pathname: '/rider', params: { name, username: name } });
 } catch (err) {
   setSubmitting(false);

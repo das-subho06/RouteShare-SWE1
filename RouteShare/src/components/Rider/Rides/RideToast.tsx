@@ -3,8 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Platform } from "react-native
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-
+import AsyncStorage from "../../lib/storage";
 const colors = {
   brand: "#FF6659",
   text: "#1A1B1F",

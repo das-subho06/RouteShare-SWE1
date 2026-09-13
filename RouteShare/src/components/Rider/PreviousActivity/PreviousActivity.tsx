@@ -1,4 +1,5 @@
 import React,{useState, useEffect} from 'react';
+import { ImageSourcePropType } from 'react-native'
 import {
   View,
   Text,
@@ -12,10 +13,10 @@ import {
   ActivityIndicator, 
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons'; 
-import AsyncStorage from '@react-native-async-storage/async-storage';  
-import { API_URL } from './config';          
+import AsyncStorage from "../../lib/storage";
+import { API_URL } from '../../config';          
 import { useRouter, useLocalSearchParams } from 'expo-router';   
-import { Sidebar } from './Sidebar';    
+import { Sidebar } from '../Sidebar';    
 // -----------------------------------------------------------------------
 // Theme
 // -----------------------------------------------------------------------
@@ -36,7 +37,7 @@ type Ride = {
   rideType: string;
   date: string;
   // rideRef: string;
-  carImage: string;
+  carImage: ImageSourcePropType;
   pickupTitle: string;
   pickupSubtitle: string;
   destinationTitle: string;
@@ -44,10 +45,11 @@ type Ride = {
   fare: string;
   paymentMethod: string;
   driverName: string;
-  driverRating: string;
+  driverRating: string|null;
   driverImage: string;
   driverPhone: string;
   rideOptions: string[];
+  status: string;
 };
 const OPTION_LABELS: Record<string, string> = {
   shared_ride: 'Shared ride',
@@ -73,14 +75,12 @@ function formatRideDate(iso?: string) {
 
 // The DB has no car-photo column — this is purely decorative, keyed off
 // ride_class, same placeholder images the mock data used.
-const CAR_IMAGES: Record<string, string> = {
-  'Go Mini': 'https://images.unsplash.com/photo-1502877338535-766e1452684a?w=200&q=60',
-  'Go Sedan': 'https://images.unsplash.com/photo-1550355291-bbee04a92027?w=200&q=60',
-  'Go SUV': 'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?w=200&q=60',
-  'Go XL': 'https://images.unsplash.com/photo-1502877338535-766e1452684a?w=200&q=60',
-  'Go Premier': 'https://images.unsplash.com/photo-1550355291-bbee04a92027?w=200&q=60',
+const CAR_IMAGES: Record<string, ImageSourcePropType> = {
+  'Go Mini': require('../../../../assets/images/mini.png'),
+  'Go Sedan': require('../../../../assets/images/sedan.png'),
+  'Go SUV': require('../../../../assets/images/suv.png'),
+  'Go XL': require('../../../../assets/images/xl.png'),
 };
-
 function mapRowToRide(row: any): Ride {
   const pickup = splitLabel(row.pickup_label);
   const destination = splitLabel(row.destination_label);
@@ -94,12 +94,13 @@ function mapRowToRide(row: any): Ride {
     pickupSubtitle: pickup.subtitle,
     destinationTitle: destination.title,
     destinationSubtitle: destination.subtitle,
-    fare: `₹${row.price ?? 0}`,
+        fare: `₹${row.price ?? 0}`,
     paymentMethod: row.payment_method
       ? row.payment_method.charAt(0).toUpperCase() + row.payment_method.slice(1)
       : 'Cash',
     driverName: row.driver_name ?? 'Driver',
-    driverRating: row.rider_given_rating != null ? `${row.rider_given_rating}` : '4.5',
+    driverRating: row.rider_given_rating != null ? `${row.rider_given_rating}` : null,
+    status: row.status,
     driverImage: '',   // no photo column in your schema — RideCard already has this <Image> commented out
     driverPhone: '',   // no phone column in your rides/users query — call button is already commented out too
     rideOptions: Array.isArray(row.ride_options) ? row.ride_options : [],
@@ -138,7 +139,7 @@ function RideCard({ ride }: { ride: Ride }) {
       {/* Card header */}
       <TouchableOpacity activeOpacity={0.8} onPress={() => Alert.alert(ride.rideType, `${ride.date}\n`)}>
         <View style={styles.cardHeader}>
-          <Image source={{ uri: ride.carImage }} style={styles.carImage} />
+          <Image source={ ride.carImage } style={styles.carImage} />
           <View style={{ flex: 1 }}>
             <Text style={styles.rideType}>{ride.rideType}</Text>
             <View style={styles.dateRow}>
@@ -208,17 +209,36 @@ function RideCard({ ride }: { ride: Ride }) {
 
       {/* Driver */}
       <View style={styles.driverRow}>
+             {/* Driver */}
+     
         <TouchableOpacity
           style={styles.driverInfo}
           activeOpacity={0.8}
-          onPress={() => Alert.alert(ride.driverName, `Rating: ${ride.driverRating} ★`)}
+          onPress={() =>
+            Alert.alert(
+              ride.driverName,
+              ride.status === 'cancelled'
+                ? 'This ride was cancelled.'
+                : ride.driverRating
+                ? `Rating: ${ride.driverRating} ★`
+                : 'Not yet rated.'
+            )
+          }
         >
           {/* <Image source={{ uri: ride.driverImage }} style={styles.driverAvatar} /> */}
           <View>
             <Text style={styles.driverName}>{ride.driverName}</Text>
             <View style={styles.ratingRow}>
-              <Text style={styles.ratingText}>{ride.driverRating} </Text>
-              <Text style={styles.star}>★</Text>
+              {ride.status === 'cancelled' ? (
+                <Text style={[styles.ratingText, { color: '#d13b3b', fontWeight: '700' }]}>Cancelled</Text>
+              ) : ride.driverRating ? (
+                <>
+                  <Text style={styles.ratingText}>{ride.driverRating} </Text>
+                  <Text style={styles.star}>★</Text>
+                </>
+              ) : (
+                <Text style={[styles.ratingText, { color: GRAY }]}>Not yet rated</Text>
+              )}
             </View>
           </View>
         </TouchableOpacity>
@@ -282,6 +302,9 @@ useEffect(() => {
     if (key === 'chat') {
       router.push({ pathname: '/chat', params: { name: riderName, username: riderName } });
     }
+    if (key === 'ongoing_rides') {
+      router.push({ pathname: '/shareRide', params: { name: riderName, username: riderName } });
+    }
     // 'activity' is this screen — nothing to do.
     // 'chat' has no standalone screen yet (chat currently only lives inside
     // confirmPage's modal during an active ride) — wire this up once/if you
@@ -342,7 +365,7 @@ useEffect(() => {
 // -----------------------------------------------------------------------
 // Styles
 // -----------------------------------------------------------------------
-const CARD_WIDTH = '32%';
+// const CARD_WIDTH = '32%';
 
 const styles = StyleSheet.create({
   root: { flex: 1, flexDirection: 'row' },   // NEW — sidebar + content side by side on wide screens
@@ -371,10 +394,11 @@ const styles = StyleSheet.create({
   cardsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'space-between',
+    gap:20,
   },
   card: {
-    width: CARD_WIDTH,
+    width: 380,
+    maxWidth:'100%',
     minWidth: 260,
     backgroundColor: CARD_BG,
     borderRadius: 16,

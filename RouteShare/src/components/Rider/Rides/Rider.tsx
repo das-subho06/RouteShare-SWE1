@@ -17,13 +17,13 @@ import {
 } from "react-native";
 import { Ionicons, MaterialIcons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Location from "expo-location";
-import {Sidebar} from "./Sidebar";
+import {Sidebar} from "../Sidebar";
 import { router, useLocalSearchParams } from "expo-router";
 import ChooseRide, { RideOption } from "./ChooseRide";
 import RideToast from "./RideToast";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { API_URL } from "./config";
-import { getSocket } from "./lib/socket";
+import AsyncStorage from "../../lib/storage";
+import { API_URL } from "../../config";
+import { getSocket } from "../../lib/socket";
 /* ------------------------------------------------------------------ */
 /*  Theme                                                               */
 /* ------------------------------------------------------------------ */
@@ -81,6 +81,18 @@ if (Platform.OS !== "web") {
 /* ------------------------------------------------------------------ */
 
 type Place = { label: string; sublabel: string; latitude: number; longitude: number };
+
+// Alert.alert renders nothing on web (react-native-web has no real dialog
+// implementation for it) — fall back to window.alert there so validation
+// messages are actually visible, same pattern already used for the web
+// confirm() branch in driverDashboard's cancel-ride flow.
+function notify(title: string, message: string) {
+  if (Platform.OS === "web") {
+    window.alert(`${title}\n\n${message}`);
+  } else {
+    Alert.alert(title, message);
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /*  Sidebar (reusable — mount it any number of times)                  */
@@ -716,6 +728,46 @@ function RouteMap({
     return () => window.removeEventListener("message", handler);
   }, [pickMode, onMapPick]);
 
+  // Real, road-following route geometry between pickup and destination —
+  // straight-line coordinates only give you a "as the crow flies" diagonal.
+  // OSRM's public demo server is free and needs no API key, which is fine
+  // for development/testing, but it's rate-limited and its usage policy
+  // (https://project-osrm.org/) explicitly says it's not meant for
+  // production traffic — for a real deployment, swap this fetch for
+  // Mapbox Directions, Google Directions, or a self-hosted OSRM instance.
+  const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+  useEffect(() => {
+    if (!destination) {
+      setRouteCoords([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const url =
+          `https://router.project-osrm.org/route/v1/driving/` +
+          `${pickup.longitude},${pickup.latitude};${destination.longitude},${destination.latitude}` +
+          `?overview=full&geometries=geojson`;
+        const res = await fetch(url);
+        const data = await res.json();
+        const coords = data?.routes?.[0]?.geometry?.coordinates;
+        if (!cancelled && Array.isArray(coords) && coords.length > 0) {
+          // GeoJSON gives [lng, lat] pairs — flip to the {latitude, longitude}
+          // shape both Leaflet-via-postMessage and react-native-maps expect.
+          setRouteCoords(coords.map(([lng, lat]: [number, number]) => ({ latitude: lat, longitude: lng })));
+        } else if (!cancelled) {
+          setRouteCoords([]); // fall back to the straight line below
+        }
+      } catch (err) {
+        console.error("Failed to fetch route geometry, falling back to straight line", err);
+        if (!cancelled) setRouteCoords([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pickup.latitude, pickup.longitude, destination?.latitude, destination?.longitude]);
+
   // Pan the native camera to the pickup point whenever it changes (e.g. the
   // "use current location" button) — initialRegion only applies on first mount.
   const nativeMapRef = useRef<any>(null);
@@ -744,7 +796,11 @@ function RouteMap({
         const pin = (color) => L.divIcon({className:'',html:'<div style="width:14px;height:14px;border-radius:7px;background:'+color+';border:2px solid white;"></div>'});
         L.marker([${pickup.latitude}, ${pickup.longitude}], {icon: pin('${colors.pickupDot}')}).addTo(map);
         ${destination ? `L.marker([${destination.latitude}, ${destination.longitude}], {icon: pin('${colors.destDot}')}).addTo(map);
-        L.polyline([[${pickup.latitude},${pickup.longitude}],[${destination.latitude},${destination.longitude}]], {color:'${colors.brand}', weight:4}).addTo(map);` : ""}
+        L.polyline(${JSON.stringify(
+          routeCoords.length > 0
+            ? routeCoords.map((c) => [c.latitude, c.longitude])
+            : [[pickup.latitude, pickup.longitude], [destination.latitude, destination.longitude]]
+        )}, {color:'${colors.brand}', weight:4}).addTo(map);` : ""}
         map.on('click', function(e) {
           window.parent.postMessage({ type: 'map-click', lat: e.latlng.lat, lng: e.latlng.lng }, '*');
         });
@@ -798,7 +854,7 @@ function RouteMap({
             <Marker coordinate={destination} title={destination.label}>
               <View style={[mapStyles.pin, { backgroundColor: colors.destDot }]} />
             </Marker>
-            <Polyline coordinates={[pickup, destination]} strokeColor={colors.brand} strokeWidth={4} />
+            <Polyline coordinates={routeCoords.length > 0 ? routeCoords : [pickup, destination]} strokeColor={colors.brand} strokeWidth={4} />
           </>
         )}
       </MapView>
@@ -922,8 +978,6 @@ function useCurrentLocation() {
 }
 const KOLKATA_CENTER: Place = { label: "", sublabel: "", latitude: 22.5677, longitude: 88.3572 };
 
-const WORK_PLACE: Place = { label: "Ecospace Business Park", sublabel: "New Town, Kolkata, West Bengal", latitude: 22.5771, longitude: 88.4297 };
-
 export default function Rider() {
   const { width } = useWindowDimensions();
   const isWide = width >= 980;
@@ -955,8 +1009,38 @@ export default function Rider() {
   const skipNextFocusResetRef = useRef(false); // used to skip the useFocusEffect reset when returning from confirmPage
   const { getCurrentLocation, loading: locLoading } = useCurrentLocation();
 
-  const distanceKm = 12.6;
-  const durationMinutes = 24;
+  const [distanceKm, setDistanceKm] = useState(0);
+const [durationMinutes, setDurationMinutes] = useState(0);
+
+useEffect(() => {
+  if (!destination) {
+    setDistanceKm(0);
+    setDurationMinutes(0);
+    return;
+  }
+  let cancelled = false;
+  (async () => {
+    try {
+      const url =
+        `https://router.project-osrm.org/route/v1/driving/` +
+        `${pickup.longitude},${pickup.latitude};${destination.longitude},${destination.latitude}` +
+        `?overview=false`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const route = data?.routes?.[0];
+      if (!cancelled && route) {
+        setDistanceKm(Math.round((route.distance / 1000) * 10) / 10); // meters -> km, 1 decimal
+           setDurationMinutes(Math.round((route.duration / 60) * 2.5));          // seconds -> minutes
+      }
+    } catch (err) {
+      console.error("Failed to fetch route distance/duration", err);
+    }
+  })();
+  return () => {
+    cancelled = true;
+  };
+}, [pickup.latitude, pickup.longitude, destination?.latitude, destination?.longitude]);
+
 
   const paymentLabel = useMemo(
     () => ({ cash: "Cash", card: "Card", upi: "UPI", wallet: "Wallet" }[paymentMethod] ?? "Cash"),
@@ -1026,9 +1110,15 @@ useEffect(() => {
 }, []);
 useEffect(() => {
   const socket = getSocket();
-  const handleRideCancelled = () => {
+  const handleRideCancelled = ({ cancelledByDriverId, ride }: any = {}) => {
+    if (!ride?.pickup?.label || !ride?.destination?.label) {
+      Alert.alert("Driver cancelled", "Your driver cancelled the ride. Please search again.");
+      return;
+    }
+    excludeDriverIdRef.current = cancelledByDriverId ?? null;
     skipNextFocusResetRef.current = true;
-   
+    setPickup({ label: ride.pickup.label, sublabel: "", latitude: ride.pickup.latitude, longitude: ride.pickup.longitude });
+    setDestination({ label: ride.destination.label, sublabel: "", latitude: ride.destination.latitude, longitude: ride.destination.longitude });
     setAutoSearchAfterCancel(true);
     setChooseRideVisible(true);
     Alert.alert(
@@ -1082,15 +1172,6 @@ const handleMapPick = async (lat: number, lng: number) => {
   setActiveField(null);
 };
 
-const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
-  setSavedPlaces((prev) => {
-    if (cat === "home") return { ...prev, home: pickup };
-    if (cat === "work") return { ...prev, work: pickup };
-    if (cat === "other") return { ...prev, other: [...prev.other, pickup] };
-    return { ...prev, favorite: [...prev.favorite, pickup] };
-  });
-  setShowSavePrompt(false);
-};
  const handleUseCurrentLocation = async () => {
   const loc = await getCurrentLocation();
   if (loc) {
@@ -1101,11 +1182,6 @@ const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
   }
 };
 
-  const handleAddFavorite = () => {
-    if (!destination) return;
-    setFavorites((prev) => (prev.find((f) => f.label === destination.label) ? prev : [...prev, destination]));
-    Alert.alert("Saved", `${destination.label} added to your favorites.`);
-  };
   const handleSidebarSelect = (key: string) => {
   if (key === "activity") {
     router.push({
@@ -1119,28 +1195,37 @@ const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
       params: { name: riderName, username: riderName },
     });
   }
-  // "ride" is this screen — nothing to do.
-  // "chat" has no standalone screen yet.
+  if (key === "ongoing_rides") {
+    router.push({
+      pathname: "/shareRide",   // adjust if your file/route is registered under a different path
+      params: { name: riderName, username: riderName },
+    });
+  }
 };
   const handleSeePrices = () => {
     if (!pickup.label) {
-      Alert.alert("Add a pickup location", "Please enter your pickup location, or use your current location.");
+      notify("Add a pickup location", "Please enter your pickup location, or use your current location.");
       return;
     }
     if (!destination) {
-      Alert.alert("Add a destination", "Please choose where you're headed first.");
+      notify("Add a destination", "Please choose where you're headed first.");
+      return;
+    }
+    if (rideOptions.length === 0) {
+      notify("Select an option", "Please choose a ride option (e.g. Shared ride or No shared ride) before continuing.");
       return;
     }
     setAutoSearchAfterCancel(false); 
+    excludeDriverIdRef.current = null;
     setChooseRideVisible(true);
   };
-
-  const handleConfirmRide = (ride: RideOption, price: number) => {
-    setConfirmedRide(ride);
-    setChooseRideVisible(false);
-    Alert.alert("Ride requested", `${ride.name} is on the way\n${pickup.label} → ${destination?.label}\n₹${price}`);
-  };
-
+  const activeRideSnapshotRef = useRef<{ pickup: Place; destination: Place } | null>(null);
+  const excludeDriverIdRef = useRef<string | null>(null);
+const handleConfirmRide = (ride: RideOption, price: number) => {
+  setConfirmedRide(ride);
+  setChooseRideVisible(false);
+  Alert.alert("Ride requested", `${ride.name} is on the way\n${pickup.label} → ${destination?.label}\n₹${price}`);
+};
   const scheduleLabel =
     pickupMode === "later" && scheduledAt
       ? scheduledAt.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
@@ -1291,7 +1376,9 @@ const handleSaveCategory = (cat: "home" | "work" | "other" | "favorite") => {
   riderCount={riderCount}
   paymentMethod={paymentMethod}
   rideOptions={rideOptions}
+  riderName={riderName}
   autoSearch={autoSearchAfterCancel}   // NEW
+  excludeDriverId={autoSearchAfterCancel ? excludeDriverIdRef.current : null}   // NEW
   initialSelectedId={confirmedRide?.id}
   onClose={() => setChooseRideVisible(false)}
   onConfirm={handleConfirmRide}
