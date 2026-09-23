@@ -1022,11 +1022,17 @@ useEffect(() => {
   (async () => {
     try {
       const url =
-        `https://router.project-osrm.org/route/v1/driving/` +
-        `${pickup.longitude},${pickup.latitude};${destination.longitude},${destination.latitude}` +
-        `?overview=false`;
+      `https://router.project-osrm.org/route/v1/driving/` +
+      `${pickup.longitude},${pickup.latitude};${destination.longitude},${destination.latitude}` +
+      `?overview=full&geometries=geojson`;
       const res = await fetch(url);
+      console.log("OSRM status:", res.status);
       const data = await res.json();
+      console.log("OSRM response:", JSON.stringify(data, null, 2));
+      const coords = data?.routes?.[0]?.geometry?.coordinates;
+
+      console.log("OSRM coordinates:", coords);
+      console.log("Number of coordinates:", coords?.length);
       const route = data?.routes?.[0];
       if (!cancelled && route) {
         setDistanceKm(Math.round((route.distance / 1000) * 10) / 10); // meters -> km, 1 decimal

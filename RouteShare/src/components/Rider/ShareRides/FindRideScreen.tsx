@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import AsyncStorage from '../../lib/storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   View,
@@ -66,6 +67,26 @@ type RideMatch = {
   etaToNearestStopMinutes?: number;
   stops: RideStop[];
   occupants: Occupant[];
+
+  availableSeats: number;
+  distanceKm: number;
+  durationMinutes: number;
+
+  pickup: {
+    label: string;
+    latitude: number;
+    longitude: number;
+  };
+
+  destination: {
+    label: string;
+    latitude: number;
+    longitude: number;
+  };
+
+  rideCode: string;
+  driverId: number;
+  status: string;
 };
 
 type RideStop = {
@@ -103,74 +124,74 @@ const colors = {
 // pickup / destination. Here we simulate "rides that match this route".
 // -----------------------------------------------------------------------------
 
-const MOCK_RIDES: RideMatch[] = [
-  {
-    id: 'ride-1',
-    routeFrom: 'Newtown',
-    routeTo: 'Dum Dum',
-    leavingInMinutes: 12,
-    carName: 'Go Sedan',
-    ac: true,
-    driverName: 'Priya S.',
-    driverRating: 4.8,
-    seats: { filled: 2, total: 4 },
-    pricePerRider: 85,
-    stops: [
-      { id: 's1', label: 'Newtown', sublabel: 'Arjun getting down (7 seats)', kind: 'dropoff', x: 78, y: 78 },
-      { id: 's2', label: 'Saltlake', sublabel: 'Sneha (Will board)', kind: 'pickup', x: 62, y: 60 },
-      { id: 's3', label: 'Karunamoyee', sublabel: 'Arjun M. (Passenger)', kind: 'active', x: 68, y: 32 },
-      { id: 's4', label: 'Paikpara', sublabel: 'Sneha (Will drop off)', kind: 'dropoff', x: 55, y: 22 },
-      { id: 's5', label: 'Dum Dum', sublabel: 'Riya (Driver)', kind: 'active', x: 82, y: 8 },
-    ],
-    occupants: [
-      { id: 'o1', name: 'Priya S.', role: 'Driver' },
-      { id: 'o2', name: 'Arjun M.', role: 'Passenger' },
-    ],
-  },
-  {
-    id: 'ride-2',
-    routeFrom: 'Newtown',
-    routeTo: 'Dum Dum',
-    leavingInMinutes: 13,
-    carName: 'Go Sedan',
-    ac: true,
-    driverName: 'Priya S.',
-    driverRating: 4.8,
-    seats: { filled: 2, total: 4 },
-    pricePerRider: 85,
-    stops: [
-      { id: 's1', label: 'Newtown', sublabel: 'Route start', kind: 'pickup', x: 78, y: 78 },
-      { id: 's2', label: 'Saltlake', sublabel: 'On the way', kind: 'active', x: 62, y: 60 },
-      { id: 's3', label: 'Dum Dum', sublabel: 'Route end', kind: 'dropoff', x: 82, y: 8 },
-    ],
-    occupants: [
-      { id: 'o1', name: 'Priya S.', role: 'Driver' },
-      { id: 'o2', name: 'Rahul K.', role: 'Passenger' },
-    ],
-  },
-  {
-    id: 'ride-3',
-    routeFrom: 'Newtown',
-    routeTo: 'Dum Dum',
-    leavingInMinutes: 18,
-    carName: 'Go Sedan',
-    ac: true,
-    driverName: 'Priya S.',
-    driverRating: 4.8,
-    seats: { filled: 2, total: 4 },
-    pricePerRider: 85,
-    etaToNearestStopMinutes: 8,
-    stops: [
-      { id: 's1', label: 'Newtown', sublabel: 'Route start', kind: 'pickup', x: 78, y: 78 },
-      { id: 's2', label: 'Karunamoyee', sublabel: 'Reaches in ~8 min', kind: 'active', x: 68, y: 32 },
-      { id: 's3', label: 'Dum Dum', sublabel: 'Route end', kind: 'dropoff', x: 82, y: 8 },
-    ],
-    occupants: [
-      { id: 'o1', name: 'Priya S.', role: 'Driver' },
-      { id: 'o2', name: 'Meera D.', role: 'Passenger' },
-    ],
-  },
-];
+// const MOCK_RIDES: RideMatch[] = [
+//   {
+//     id: 'ride-1',
+//     routeFrom: 'Newtown',
+//     routeTo: 'Dum Dum',
+//     leavingInMinutes: 12,
+//     carName: 'Go Sedan',
+//     ac: true,
+//     driverName: 'Priya S.',
+//     driverRating: 4.8,
+//     seats: { filled: 2, total: 4 },
+//     pricePerRider: 85,
+//     stops: [
+//       { id: 's1', label: 'Newtown', sublabel: 'Arjun getting down (7 seats)', kind: 'dropoff', x: 78, y: 78 },
+//       { id: 's2', label: 'Saltlake', sublabel: 'Sneha (Will board)', kind: 'pickup', x: 62, y: 60 },
+//       { id: 's3', label: 'Karunamoyee', sublabel: 'Arjun M. (Passenger)', kind: 'active', x: 68, y: 32 },
+//       { id: 's4', label: 'Paikpara', sublabel: 'Sneha (Will drop off)', kind: 'dropoff', x: 55, y: 22 },
+//       { id: 's5', label: 'Dum Dum', sublabel: 'Riya (Driver)', kind: 'active', x: 82, y: 8 },
+//     ],
+//     occupants: [
+//       { id: 'o1', name: 'Priya S.', role: 'Driver' },
+//       { id: 'o2', name: 'Arjun M.', role: 'Passenger' },
+//     ],
+//   },
+//   {
+//     id: 'ride-2',
+//     routeFrom: 'Newtown',
+//     routeTo: 'Dum Dum',
+//     leavingInMinutes: 13,
+//     carName: 'Go Sedan',
+//     ac: true,
+//     driverName: 'Priya S.',
+//     driverRating: 4.8,
+//     seats: { filled: 2, total: 4 },
+//     pricePerRider: 85,
+//     stops: [
+//       { id: 's1', label: 'Newtown', sublabel: 'Route start', kind: 'pickup', x: 78, y: 78 },
+//       { id: 's2', label: 'Saltlake', sublabel: 'On the way', kind: 'active', x: 62, y: 60 },
+//       { id: 's3', label: 'Dum Dum', sublabel: 'Route end', kind: 'dropoff', x: 82, y: 8 },
+//     ],
+//     occupants: [
+//       { id: 'o1', name: 'Priya S.', role: 'Driver' },
+//       { id: 'o2', name: 'Rahul K.', role: 'Passenger' },
+//     ],
+//   },
+//   {
+//     id: 'ride-3',
+//     routeFrom: 'Newtown',
+//     routeTo: 'Dum Dum',
+//     leavingInMinutes: 18,
+//     carName: 'Go Sedan',
+//     ac: true,
+//     driverName: 'Priya S.',
+//     driverRating: 4.8,
+//     seats: { filled: 2, total: 4 },
+//     pricePerRider: 85,
+//     etaToNearestStopMinutes: 8,
+//     stops: [
+//       { id: 's1', label: 'Newtown', sublabel: 'Route start', kind: 'pickup', x: 78, y: 78 },
+//       { id: 's2', label: 'Karunamoyee', sublabel: 'Reaches in ~8 min', kind: 'active', x: 68, y: 32 },
+//       { id: 's3', label: 'Dum Dum', sublabel: 'Route end', kind: 'dropoff', x: 82, y: 8 },
+//     ],
+//     occupants: [
+//       { id: 'o1', name: 'Priya S.', role: 'Driver' },
+//       { id: 'o2', name: 'Meera D.', role: 'Passenger' },
+//     ],
+//   },
+// ];
 
 // -----------------------------------------------------------------------------
 // Colors
@@ -437,12 +458,24 @@ export default function FindRideScreen() {
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const { name: nameParam } = useLocalSearchParams<{ name?: string | string[]; username?: string | string[] }>();
       const riderName = (Array.isArray(nameParam) ? nameParam[0] : nameParam)?.trim() || "Rider";
-  const rides = useMemo(() => MOCK_RIDES, []);
+      const [rides, setRides] = useState<RideMatch[]>([]);
+      const [ridesLoading, setRidesLoading] = useState(false);
   const { getCurrentLocation, loading: locLoading } = useCurrentLocation();
   const selectedRide = useMemo(
     () => rides.find((r) => r.id === selectedRideId) ?? null,
     [rides, selectedRideId]
   );
+  const [riderId, setRiderId] = useState<string | null>(null);
+
+useEffect(() => {
+  const loadUserId = async () => {
+    const uid = await AsyncStorage.getItem("userId");
+    console.warn("🔥🔥 STORED USER ID:", uid);
+    setRiderId(uid);
+  };
+
+  loadUserId();
+}, []);
   const handleSidebarSelect = (key: string) => {
     if (key === "activity") {
       router.push({
@@ -464,11 +497,18 @@ export default function FindRideScreen() {
     }
     
   };
-  const handleSearch = () => {
+  const handleSearch = async () => {
+    console.warn("🔥🔥🔥 SEARCH BUTTON PRESSED 🔥🔥🔥");
     if (!pickup.label.trim() || !destination?.label?.trim()) {
-      Alert.alert('Missing info', 'Please enter both a pickup and a destination.');
+      Alert.alert(
+        'Missing info',
+        'Please enter both a pickup and a destination.'
+      );
       return;
     }
+  
+    await fetchSharedRides();
+  
     setView('results');
   };
 
@@ -528,6 +568,90 @@ export default function FindRideScreen() {
     }, 700);
   };
 
+  const fetchSharedRides = async () => {
+    console.warn("🚨🚨🚨 fetchSharedRides() CALLED 🚨🚨🚨");
+    console.warn("1️⃣ riderId =", riderId);
+    if (!riderId) {
+      console.warn("❌ STOPPED: riderId is missing");
+      Alert.alert('Error', 'User ID not found.');
+      return;
+    }
+    console.warn("👤 RIDER ID:", riderId);
+console.warn("📍 PICKUP:", pickup.latitude, pickup.longitude);
+console.warn("🎯 DESTINATION:", destination?.latitude, destination?.longitude);
+  
+    if (!pickup.latitude || !pickup.longitude || !destination?.latitude || !destination?.longitude) {
+      Alert.alert('Error', 'Please select valid pickup and destination locations.');
+      return;
+    }
+  
+    try {
+      setRidesLoading(true);
+  
+      // IMPORTANT:
+      // Replace this with the same backend base URL you use elsewhere
+      // in your Expo app.
+      const API_URL = process.env.EXPO_PUBLIC_API_URL;
+      console.warn("🌐 API_URL:", API_URL);
+      const params = new URLSearchParams({
+        riderId: String(riderId),
+  
+        pickupLat: String(pickup.latitude),
+        pickupLng: String(pickup.longitude),
+  
+        destinationLat: String(destination.latitude),
+        destinationLng: String(destination.longitude),
+  
+        distanceKm: '10.9',
+        seatsRequested: '1',
+      });
+
+      console.log('========== SHARED RIDE DEBUG ==========');
+console.log('API_URL:', API_URL);
+console.log('riderId:', riderId);
+
+console.log('Pickup:', {
+  label: pickup.label,
+  latitude: pickup.latitude,
+  longitude: pickup.longitude,
+});
+
+console.log('Destination:', {
+  label: destination.label,
+  latitude: destination.latitude,
+  longitude: destination.longitude,
+});
+
+console.log('Request URL:',URL);
+
+      const response = await fetch(
+        `${API_URL}/api/rides/shared?${params.toString()}`
+      );
+      console.log('Response status:', response.status);
+  
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+  
+      const data = await response.json();
+  
+      console.log('SHARED RIDES FROM BACKEND:', data);
+  
+      setRides(data);
+    } catch (error) {
+      console.error('Failed to fetch shared rides:', error);
+  
+      setRides([]);
+  
+      Alert.alert(
+        'Error',
+        'Could not fetch available shared rides.'
+      );
+    } finally {
+      setRidesLoading(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       
@@ -581,6 +705,7 @@ export default function FindRideScreen() {
             pickup={pickup.label}
             destination={destination?.label ?? ''}
             rides={rides}
+            loading={ridesLoading}
             onSelectRide={handleSelectRide}
           />
         )}
@@ -1049,11 +1174,13 @@ function ResultsList({
   pickup,
   destination,
   rides,
+  loading,
   onSelectRide,
 }: {
   pickup: string;
   destination: string;
   rides: RideMatch[];
+  loading: boolean;
   onSelectRide: (id: string) => void;
 }) {
   return (
@@ -1064,7 +1191,22 @@ function ResultsList({
           <Text style={styles.countPillText}>{rides.length} rides found</Text>
         </View>
       </View>
-
+      {loading && (
+      <View style={{ padding: 30, alignItems: 'center' }}>
+        <ActivityIndicator size="large" color={COLORS.coral} />
+        <Text style={{ marginTop: 10, color: COLORS.textMuted }}>
+          Finding shared rides...
+        </Text>
+      </View>
+    )}
+    {!loading && rides.length === 0 && (
+      <View style={styles.emptyState}>
+        <Text style={styles.emptyStateText}>
+          No rides found from {pickup} to {destination} right now.
+          Try again in a few minutes.
+        </Text>
+      </View>
+    )}
       {rides.map((ride) => (
         <RideCard key={ride.id} ride={ride} onPress={() => onSelectRide(ride.id)} />
       ))}
@@ -1114,7 +1256,10 @@ function RideCard({ ride, onPress }: { ride: RideMatch; onPress: () => void }) {
       <View style={styles.metaRow}>
         <Text style={styles.metaItem}>🚗 {ride.carName}</Text>
         <Text style={styles.metaItem}>
-          👥 {ride.seats.filled} of {ride.seats.total} available
+          👥 {ride.availableSeats} seats available
+        </Text>
+        <Text style={styles.metaItem}>
+          🪑 {ride.seats.total} seats
         </Text>
       </View>
       <View style={styles.metaRow}>

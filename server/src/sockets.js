@@ -9,7 +9,9 @@ function initSockets(io) {
 
     // Driver goes online — client emits this right after driverDashboard mounts
     socket.on('driver_online', ({ userId }) => {
+      console.log("DRIVER ONLINE:", userId);
       onlineDrivers.set(String(userId), socket.id);
+      console.log("ONLINE DRIVERS MAP:", [...onlineDrivers.entries()]);
       socket.data.userId = userId;
       socket.data.role = 'driver';
     });
