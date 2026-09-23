@@ -240,6 +240,18 @@ export default function DriverDashboard() {
 const [chatMessages, setChatMessages] = useState<{ id: string; text: string; sender: 'rider' | 'driver' }[]>([]);
 const chatPresets = ["I'm on my way", "I've arrived", "Running a few minutes late", "Okay, thanks"];
 const [cancelling, setCancelling] = useState(false);
+// A join request that has already been Allowed by every existing rider in
+// the active ride, and now needs the driver's final Accept/Decline.
+const [incomingJoinRequest, setIncomingJoinRequest] = useState<{
+  joinRequestId: string;
+  rideId: string;
+  requesterName: string;
+  pickup: string;
+  destination: string;
+  seatsRequested: number;
+  price?: number | string;
+} | null>(null);
+const [joinDecisionSending, setJoinDecisionSending] = useState(false);
 const sendChatMessage = (text: string) => {
   const trimmed = text.trim();
   if (!trimmed || !activeRide) return;
@@ -329,10 +341,36 @@ useEffect(() => {
       setRequests((prev) => prev.filter((r) => String(r.id) !== String(id)));
     };
 
+    // A brand-new rider wants to join a ride that's already underway, and
+    // every existing rider in that car has already tapped "Allow" — now it's
+    // the driver's turn to make the final call.
+    const handleJoinRequestIncoming = (req: any) => {
+      console.log('📩 join_request_incoming received:', req);
+      setIncomingJoinRequest({
+        joinRequestId: String(req.joinRequestId),
+        rideId: String(req.rideId),
+        requesterName: req.requesterName ?? 'A rider',
+        pickup: req.pickup ?? '—',
+        destination: req.destination ?? '—',
+        seatsRequested: req.seatsRequested ?? 1,
+        price: req.price,
+      });
+    };
+
+    // The request was resolved some other way (e.g. it timed out, or — in a
+    // multi-device edge case — got closed already) before the driver acted.
+    const handleJoinRequestClosed = ({ joinRequestId }: any) => {
+      setIncomingJoinRequest((prev) =>
+        prev && String(prev.joinRequestId) === String(joinRequestId) ? null : prev
+      );
+    };
+
     socket.on('connect', registerOnline); // fires on first connect AND every reconnect
     socket.on('incoming_request', handleIncoming);
     socket.on('ride_unavailable', handleUnavailable);
     socket.on('request_taken', handleTaken);
+    socket.on('join_request_incoming', handleJoinRequestIncoming);
+    socket.on('join_request_closed', handleJoinRequestClosed);
 
     (async () => {
       const storedUid = await AsyncStorage.getItem('userId');
@@ -362,6 +400,8 @@ useEffect(() => {
       socket.off('incoming_request', handleIncoming);
       socket.off('ride_unavailable', handleUnavailable);
       socket.off('request_taken', handleTaken);
+      socket.off('join_request_incoming', handleJoinRequestIncoming);
+      socket.off('join_request_closed', handleJoinRequestClosed);
     };
   }, []);
 
@@ -444,6 +484,24 @@ useEffect(() => {
     const handleDecline = (rideId: string) => {
     getSocket().emit('cancel_ride_request', { requestId: rideId });
     setRequests((prev) => prev.filter((r) => r.id !== rideId));
+  };
+
+  const respondToJoinRequest = (decision: 'allow' | 'deny') => {
+    if (!incomingJoinRequest || !userId || joinDecisionSending) return;
+    setJoinDecisionSending(true);
+    getSocket().emit(
+      'join_request_driver_decision',
+      {
+        joinRequestId: incomingJoinRequest.joinRequestId,
+        rideId: incomingJoinRequest.rideId,
+        driverId: userId,
+        decision,
+      },
+      () => {
+        setJoinDecisionSending(false);
+        setIncomingJoinRequest(null);
+      }
+    );
   };
 
    const performCancelRide = () => {
@@ -584,6 +642,40 @@ useEffect(() => {
     </Pressable>
   </View>
 </View>
+{/* Final approve/decline for a rider who wants to join this active ride —
+    only shown once every existing passenger has already said Allow. */}
+<Modal visible={!!incomingJoinRequest} animationType="fade" transparent>
+  <View style={styles.modalOverlay}>
+    <View style={styles.chatSheet}>
+      <View style={styles.chatHeader}>
+        <Text style={styles.chatTitle}>New rider wants to join</Text>
+      </View>
+      <View style={{ padding: 24, gap: 8 }}>
+        <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.text }}>
+          {incomingJoinRequest?.requesterName}
+        </Text>
+        <Text style={{ fontSize: 13.5, color: COLORS.textMuted, lineHeight: 20 }}>
+          Pickup: {incomingJoinRequest?.pickup}{'\n'}
+          Drop-off: {incomingJoinRequest?.destination}{'\n'}
+          Seats requested: {incomingJoinRequest?.seatsRequested}
+          {incomingJoinRequest?.price ? `\nFare: ₹${incomingJoinRequest.price}` : ''}
+        </Text>
+        <Text style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 4 }}>
+          All current passengers have already agreed — this is the final call.
+        </Text>
+        <View style={styles.actionRow}>
+          <Pressable style={styles.declineBtn} disabled={joinDecisionSending} onPress={() => respondToJoinRequest('deny')}>
+            <Text style={styles.declineText}>Decline</Text>
+          </Pressable>
+          <Pressable style={styles.acceptBtn} disabled={joinDecisionSending} onPress={() => respondToJoinRequest('allow')}>
+            <Text style={styles.acceptText}>Accept</Text>
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  </View>
+</Modal>
+
 <Modal visible={chatVisible} animationType="slide" transparent>
   <View style={styles.modalOverlay}>
     <View style={styles.chatSheet}>

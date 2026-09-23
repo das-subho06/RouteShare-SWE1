@@ -17,7 +17,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import {Sidebar} from "../Sidebar";
-
+import { API_URL } from '../../config';
+import { getSocket } from '../../lib/socket';
 // -----------------------------------------------------------------------------
 // Optional native map module, loaded defensively (same pattern as Rider.tsx)
 // -----------------------------------------------------------------------------
@@ -455,6 +456,10 @@ export default function FindRideScreen() {
   const [view, setView] = useState<ViewState>('search');
   const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
   const [requestStatus, setRequestStatus] = useState<'idle' | 'sending' | 'sent'>('idle');
+  // The id of the join-request we're waiting on a final rider/driver decision
+  // for. Set once the POST below succeeds, cleared once `join_request_result`
+  // (approved or denied) comes back over the socket.
+  const [pendingJoinRequestId, setPendingJoinRequestId] = useState<string | null>(null);
   const { width } = useWindowDimensions();
     const isWide = width >= 980;
     const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -480,6 +485,24 @@ useEffect(() => {
   loadUserId();
 }, []);
 
+  useEffect(() => {
+    const loadUserId = async () => {
+      const uid = await AsyncStorage.getItem("userId");
+      console.warn("🔥🔥 STORED USER ID:", uid);
+      setRiderId(uid);
+    };
+
+    loadUserId();
+  }, []);
+
+  const handleStartOwnRide = () => {
+    router.push({
+      pathname: "/rider",
+      params: { name: riderName, username: riderName },
+    });
+  };
+
+ 
   const handleSidebarSelect = (key: string) => {
     if (key === "activity") {
       router.push({
@@ -560,7 +583,7 @@ useEffect(() => {
     setView('search');
   };
 
-  const handleSendRequest = async () => {
+  const handleSendRequest = () => {
     if (!selectedRide) return;
   
     if (!riderId) {
@@ -568,67 +591,139 @@ useEffect(() => {
       return;
     }
   
-    try {
-      setRequestStatus('sending');
-  
-      const API_URL = process.env.EXPO_PUBLIC_API_URL;
-  
-      const response = await fetch(
-        `${API_URL}/api/rides/${selectedRide.id}/join-request`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            riderId: Number(riderId),
-            seatsRequested: 1,
-          }),
+    setRequestStatus('sending');
+
+    // Same ack-based contract as request_ride / accept_ride / cancel_ride —
+    // no REST round trip, so this behaves the same whether the socket just
+    // reconnected or has been open the whole time.
+    getSocket().emit(
+      'send_join_request',
+      {
+        rideId: selectedRide.id,
+        riderId: Number(riderId),
+        riderName,
+        pickup: selectedRide.pickup.label,
+        destination: selectedRide.destination.label,
+        seatsRequested: 1,
+      },
+      (res: any) => {
+        console.log('JOIN REQUEST RESPONSE:', res);
+
+        if (!res?.ok) {
+          setRequestStatus('idle');
+          Alert.alert(
+            'Could not send request',
+            res?.error ?? 'Something went wrong.'
+          );
+          return;
         }
-      );
-  
-      const data = await response.json();
-  
-      console.log('JOIN REQUEST RESPONSE:', data);
-  
-      if (!response.ok) {
-        throw new Error(
-          data.error || 'Could not send join request.'
-        );
+
+        setRequestStatus('sent');
+
+        // The backend creates one join-request record for this whole
+        // rider→passengers→driver approval chain. We hang on to its id so
+        // we can match the `join_request_result` socket event to this
+        // request specifically (a rider could in theory have more than one
+        // pending join request across different ride cards).
+        setPendingJoinRequestId(res.joinRequestId ? String(res.joinRequestId) : null);
+
+        if (res.status === 'pending_passengers') {
+          Alert.alert(
+            'Request sent',
+            'Your request has been sent to the existing passengers for approval. We\u2019ll let you know as soon as they respond.'
+          );
+        } else if (res.status === 'waiting_driver') {
+          Alert.alert(
+            'Request sent',
+            'Your request has been sent directly to the driver for approval.'
+          );
+        } else {
+          Alert.alert(
+            'Request sent',
+            'Your join request was sent successfully.'
+          );
+        }
       }
-  
-      setRequestStatus('sent');
-  
-      if (data.status === 'pending_passengers') {
-        Alert.alert(
-          'Request sent',
-          'Your request has been sent to the existing passengers for approval.'
-        );
-      } else if (data.status === 'waiting_driver') {
-        Alert.alert(
-          'Request sent',
-          'Your request has been sent directly to the driver for approval.'
-        );
-      } else {
-        Alert.alert(
-          'Request sent',
-          'Your join request was sent successfully.'
-        );
-      }
-  
-    } catch (error) {
-      console.error('JOIN REQUEST ERROR:', error);
-  
-      setRequestStatus('idle');
-  
-      Alert.alert(
-        'Could not send request',
-        error instanceof Error
-          ? error.message
-          : 'Something went wrong.'
-      );
-    }
+    );
   };
+
+  // ---------------------------------------------------------------------
+  // Listen for the final outcome of a pending join request.
+  //
+  // Flow this is the last leg of:
+  //   1. handleSendRequest (above) emits "send_join_request".
+  //   2. The server notifies every rider already in that ride
+  //      ("join_request_pending" — handled in confirmpage.tsx).
+  //   3. If ANY of them taps "Deny", the server closes the request out
+  //      right there and emits `join_request_result` with
+  //      { status: 'denied', deniedBy: 'rider' } — the driver never sees it.
+  //   4. If they all tap "Allow", the server forwards it to the driver
+  //      ("join_request_incoming" — handled in driverDashboard.tsx), who
+  //      makes the final call. Either way the server emits
+  //      `join_request_result` again with the final outcome.
+  // ---------------------------------------------------------------------
+  useEffect(() => {
+    if (!pendingJoinRequestId || !riderId) return;
+
+    const socket = getSocket();
+    const join = () => socket.emit('rider_online', { riderId });
+    if (socket.connected) join();
+    else socket.once('connect', join);
+
+    const handleJoinRequestResult = (payload: any) => {
+      if (String(payload?.joinRequestId) !== String(pendingJoinRequestId)) return;
+
+      setPendingJoinRequestId(null);
+
+      if (payload.status === 'approved') {
+        setRequestStatus('idle');
+        notify('You are in! 🎉', 'Your join request was approved. Get ready for pickup.');
+
+        if (selectedRide) {
+          router.push({
+            pathname: '/confirmPage', // adjust if your file/route is registered under a different path
+            params: {
+              requestId: String(payload.requestId ?? payload.joinRequestId),
+              rideId: selectedRide.id,
+              rideName: selectedRide.carName,
+              price: String(selectedRide.pricePerRider),
+              distanceKm: String(selectedRide.distanceKm),
+              durationMinutes: String(selectedRide.durationMinutes),
+              seats: String(selectedRide.seats.total),
+              driverName: selectedRide.driverName,
+              driverId: String(selectedRide.driverId),
+              vehicleModel: payload.vehicleModel ?? '',
+              vehicleNumber: payload.vehicleNumber ?? '',
+              driverSeats: String(selectedRide.seats.total),
+              pickup: selectedRide.pickup.label,
+              destination: selectedRide.destination.label,
+              pickupLat: String(selectedRide.pickup.latitude),
+              pickupLng: String(selectedRide.pickup.longitude),
+              destLat: String(selectedRide.destination.latitude),
+              destLng: String(selectedRide.destination.longitude),
+              rideCode: selectedRide.rideCode,
+              riderName,
+            },
+          });
+        }
+      } else {
+        // Denied — either by a fellow rider or by the driver. Reset the
+        // button so they can try a different ride.
+        setRequestStatus('idle');
+        notify(
+          'Oops, you were denied',
+          payload.deniedBy === 'driver'
+            ? 'The driver declined your request to join this ride.'
+            : 'One of the existing riders declined your request to join this ride.'
+        );
+      }
+    };
+
+    socket.on('join_request_result', handleJoinRequestResult);
+    return () => {
+      socket.off('join_request_result', handleJoinRequestResult);
+    };
+  }, [pendingJoinRequestId, riderId, selectedRide, router, riderName]);
 
   const fetchSharedRides = async () => {
     console.warn("🚨🚨🚨 fetchSharedRides() CALLED 🚨🚨🚨");
@@ -653,8 +748,8 @@ console.warn("🎯 DESTINATION:", destination?.latitude, destination?.longitude)
       // IMPORTANT:
       // Replace this with the same backend base URL you use elsewhere
       // in your Expo app.
-      const API_URL = process.env.EXPO_PUBLIC_API_URL;
-      console.warn("🌐 API_URL:", API_URL);
+      // const API_URL = process.env.EXPO_PUBLIC_API_URL;
+      // console.warn("🌐 API_URL:", API_URL);
       const params = new URLSearchParams({
         riderId: String(riderId),
   
@@ -685,7 +780,7 @@ console.log('Destination:', {
 });
 
 const requestURL =
-  `${API_URL}/api/rides/shared?${params.toString()}`;
+  `${API_URL}/rides/shared?${params.toString()}`;
 
 console.log('Request URL:', requestURL);
 
@@ -1279,9 +1374,7 @@ function ResultsList({
 
       {rides.length === 0 && (
         <View style={styles.emptyState}>
-          <Text style={styles.emptyStateText}>
-            No rides found from {pickup} to {destination} right now. Try again in a few minutes.
-          </Text>
+         
            <TouchableOpacity
             style={styles.startOwnRideButton}
             onPress={onStartOwnRide}

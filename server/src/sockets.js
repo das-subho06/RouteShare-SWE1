@@ -1,9 +1,67 @@
 const pool = require('./db');
+const { randomUUID } = require('crypto');
 
 // In-memory map instead of DB columns: userId -> socketId
 const onlineDrivers = new Map();
 
+// ---------------------------------------------------------------------------
+// Join-request approval chain (new rider -> existing riders -> driver).
+// Ephemeral like onlineDrivers above — a join request only needs to live for
+// the few seconds it takes riders/driver to answer, so no DB table for it.
+//
+// joinRequestId -> {
+//   rideId, requesterRiderId, requesterName, pickup, destination,
+//   seatsRequested, status: 'pending_passengers' | 'waiting_driver',
+//   awaitingRiderIds: string[],   // riders who haven't answered yet
+// }
+// ---------------------------------------------------------------------------
+const joinRequests = new Map();
+
+// Riders currently seated in a shared ride (accept_ride only inserts into
+// ride_participants when ride_options includes 'shared_ride' — for a plain
+// solo ride this comes back empty).
+async function getActiveRiderIds(rideId) {
+  const { rows } = await pool.query(
+    `SELECT user_id FROM ride_participants
+     WHERE ride_id = $1 AND role = 'rider' AND status = 'active'`,
+    [rideId]
+  );
+  return rows.map((r) => String(r.user_id));
+}
+
+// Ride + vehicle info needed to show/act on a join request. Only rides that
+// are actually underway can accept a new rider.
+async function getRideForJoinRequest(rideId) {
+  const { rows } = await pool.query(
+    `SELECT r.id, r.driver_id, r.price, r.ride_code,
+            dp.vehicle_model, dp.vehicle_number, dp.seats AS car_seats
+     FROM rides r
+     JOIN driver_profiles dp ON dp.user_id = r.driver_id
+     WHERE r.id = $1
+       AND r.status IN ('accepted', 'driver_arrived', 'in_progress')`,
+    [rideId]
+  );
+  return rows[0] || null;
+}
+
 function initSockets(io) {
+  // A shared ride's rider_id column only ever points at whoever made the
+  // ORIGINAL request — ride_started / ride_cancelled / ride_completed used
+  // to notify just that one room, which silently left any rider who joined
+  // later (via the join-request flow below) without pickup/cancel/complete
+  // updates. This fans the same payload out to every active participant,
+  // falling back to the single known riderId for a plain non-shared ride.
+  async function notifyRideRiders(rideId, fallbackRiderId, event, payload) {
+    let riderIds = [];
+    try {
+      riderIds = await getActiveRiderIds(rideId);
+    } catch (err) {
+      console.error(`notifyRideRiders: failed to load participants for ride ${rideId}`, err);
+    }
+    const targets = riderIds.length > 0 ? riderIds : [String(fallbackRiderId)].filter(Boolean);
+    targets.forEach((id) => io.to(`rider_${id}`).emit(event, payload));
+  }
+
   io.on('connection', (socket) => {
     console.log('Socket connected:', socket.id);
 
@@ -415,12 +473,16 @@ socket.on(
     const updated = await pool.query(
       `UPDATE rides SET status = 'in_progress', started_at = now()
        WHERE id = $1 AND driver_id = $2
-       RETURNING id`,
+       RETURNING id, rider_id`,
       [numRequestId, numDriverId]
     );
     if (updated.rowCount === 0) {
       console.warn(`⚠️ ride_code_verified: no match for id=${numRequestId} driver_id=${numDriverId}`);
       return callback?.({ ok: false, error: 'Ride not found for this driver.' });
+    }
+      const riderId = updated.rows[0]?.rider_id;
+    if (riderId) {
+      await notifyRideRiders(numRequestId, riderId, 'ride_started', { requestId: numRequestId, riderId });
     }
     callback?.({ ok: true });
   } catch (err) {
@@ -434,6 +496,185 @@ socket.on(
       socket.join(`rider_${riderId}`);
       socket.data.userId = riderId;
       socket.data.role = 'rider';
+    });
+
+    // ----------------------------------------------------------------------
+    // Join-request approval chain
+    // ----------------------------------------------------------------------
+
+    // Rider taps "Send Join Request" on FindRideScreen for a ride that's
+    // already underway. Mirrors request_ride's ack-based contract rather
+    // than going over REST, so it behaves the same way if the app is
+    // offline/reconnecting.
+    socket.on('send_join_request', async ({ rideId, riderId, riderName, pickup, destination, seatsRequested }, callback) => {
+      const numRideId = Number(rideId);
+      if (!numRideId || Number.isNaN(numRideId) || !riderId) {
+        return callback?.({ ok: false, error: 'Missing rideId or riderId.' });
+      }
+
+      try {
+        const ride = await getRideForJoinRequest(numRideId);
+        if (!ride) {
+          return callback?.({ ok: false, error: 'This ride is no longer accepting riders.' });
+        }
+
+        const riderIds = await getActiveRiderIds(numRideId);
+        if (riderIds.includes(String(riderId))) {
+          return callback?.({ ok: false, error: 'You are already in this ride.' });
+        }
+
+        const seats = Number(seatsRequested) || 1;
+        const joinRequestId = randomUUID();
+        const status = riderIds.length > 0 ? 'pending_passengers' : 'waiting_driver';
+
+        joinRequests.set(joinRequestId, {
+          rideId: numRideId,
+          requesterRiderId: String(riderId),
+          requesterName: riderName || 'A rider',
+          pickup: pickup || 'Requested pickup',
+          destination: destination || 'Requested drop-off',
+          seatsRequested: seats,
+          status,
+          awaitingRiderIds: [...riderIds],
+        });
+
+        if (status === 'pending_passengers') {
+          const payload = {
+            joinRequestId,
+            rideId: numRideId,
+            requesterName: riderName || 'A rider',
+            pickup,
+            destination,
+            seatsRequested: seats,
+          };
+          riderIds.forEach((id) => io.to(`rider_${id}`).emit('join_request_pending', payload));
+        } else {
+          const driverSocketId = onlineDrivers.get(String(ride.driver_id));
+          if (driverSocketId) {
+            io.to(driverSocketId).emit('join_request_incoming', {
+              joinRequestId,
+              rideId: numRideId,
+              requesterName: riderName || 'A rider',
+              pickup,
+              destination,
+              seatsRequested: seats,
+              price: ride.price,
+            });
+          }
+        }
+
+        console.log(`📨 join request ${joinRequestId} for ride ${numRideId} from rider ${riderId} -> ${status}`);
+        callback?.({ ok: true, status, joinRequestId });
+      } catch (err) {
+        console.error('send_join_request error:', err);
+        callback?.({ ok: false, error: 'Server error.' });
+      }
+    });
+
+    // An existing rider in the car allows/denies the newcomer. First denial
+    // wins and the driver never sees it; once every current rider has said
+    // "allow", it gets forwarded on to the driver for the final call.
+    socket.on('join_request_rider_decision', async ({ joinRequestId, riderId, decision }, callback) => {
+      const record = joinRequests.get(joinRequestId);
+      if (!record || record.status !== 'pending_passengers') {
+        return callback?.({ ok: false, error: 'This request is no longer active.' });
+      }
+
+      try {
+        if (decision === 'deny') {
+          joinRequests.delete(joinRequestId);
+          io.to(`rider_${record.requesterRiderId}`).emit('join_request_result', {
+            joinRequestId,
+            status: 'denied',
+            deniedBy: 'rider',
+          });
+          const riderIds = await getActiveRiderIds(record.rideId);
+          riderIds.forEach((id) => io.to(`rider_${id}`).emit('join_request_closed', { joinRequestId }));
+          return callback?.({ ok: true });
+        }
+
+        // decision === 'allow'
+        record.awaitingRiderIds = record.awaitingRiderIds.filter((id) => String(id) !== String(riderId));
+        if (record.awaitingRiderIds.length === 0) {
+          record.status = 'waiting_driver';
+          const ride = await getRideForJoinRequest(record.rideId);
+          if (!ride) {
+            joinRequests.delete(joinRequestId);
+            io.to(`rider_${record.requesterRiderId}`).emit('join_request_result', {
+              joinRequestId,
+              status: 'denied',
+              deniedBy: 'driver',
+            });
+            return callback?.({ ok: true });
+          }
+          const driverSocketId = onlineDrivers.get(String(ride.driver_id));
+          if (driverSocketId) {
+            io.to(driverSocketId).emit('join_request_incoming', {
+              joinRequestId,
+              rideId: record.rideId,
+              requesterName: record.requesterName,
+              pickup: record.pickup,
+              destination: record.destination,
+              seatsRequested: record.seatsRequested,
+              price: ride.price,
+            });
+          }
+        }
+        callback?.({ ok: true });
+      } catch (err) {
+        console.error('join_request_rider_decision error:', err);
+        callback?.({ ok: false, error: 'Server error.' });
+      }
+    });
+
+    // The driver makes the final call, once every existing rider has
+    // already said "allow".
+    socket.on('join_request_driver_decision', async ({ joinRequestId, decision }, callback) => {
+      const record = joinRequests.get(joinRequestId);
+      if (!record || record.status !== 'waiting_driver') {
+        return callback?.({ ok: false, error: 'This request is no longer active.' });
+      }
+
+      try {
+        if (decision === 'deny') {
+          joinRequests.delete(joinRequestId);
+          io.to(`rider_${record.requesterRiderId}`).emit('join_request_result', {
+            joinRequestId,
+            status: 'denied',
+            deniedBy: 'driver',
+          });
+          return callback?.({ ok: true });
+        }
+
+        // decision === 'allow' — seat them.
+        const ride = await getRideForJoinRequest(record.rideId);
+        if (!ride) {
+          joinRequests.delete(joinRequestId);
+          return callback?.({ ok: false, error: 'Ride no longer available.' });
+        }
+
+        await pool.query(
+          `INSERT INTO ride_participants (ride_id, user_id, role, seats_requested, status)
+           VALUES ($1, $2, 'rider', $3, 'active')
+           ON CONFLICT (ride_id, user_id)
+           DO UPDATE SET seats_requested = EXCLUDED.seats_requested, status = 'active'`,
+          [record.rideId, record.requesterRiderId, record.seatsRequested]
+        );
+
+        joinRequests.delete(joinRequestId);
+        io.to(`rider_${record.requesterRiderId}`).emit('join_request_result', {
+          joinRequestId,
+          status: 'approved',
+          requestId: record.rideId,
+          rideCode: ride.ride_code,
+          vehicleModel: ride.vehicle_model,
+          vehicleNumber: ride.vehicle_number,
+        });
+        callback?.({ ok: true });
+      } catch (err) {
+        console.error('join_request_driver_decision error:', err);
+        callback?.({ ok: false, error: 'Server error.' });
+      }
     });
 
     socket.on('disconnect', () => {
@@ -468,7 +709,7 @@ socket.on(
     // again for the same trip, that driver can be excluded from the
     // rebroadcast — otherwise the driver who just cancelled immediately
     // sees the exact same ride pop back up as a "new" request.
-    if (riderId) io.to(`rider_${riderId}`).emit('ride_cancelled', { 
+    if (riderId) await notifyRideRiders(numRequestId, riderId, 'ride_cancelled', {
       requestId, cancelledByDriverId: numDriverId,
     ride: {
           pickup: { label: r.pickup_label, latitude: r.pickup_lat, longitude: r.pickup_lng },
@@ -529,7 +770,7 @@ socket.on('cancel_ride_request', async ({ requestId }) => {
     }
     const finalRiderId = updated.rows[0]?.rider_id ?? riderId;
     if (finalRiderId) {
-      io.to(`rider_${finalRiderId}`).emit('ride_completed', { requestId, riderId: finalRiderId });
+      await notifyRideRiders(numRequestId, finalRiderId, 'ride_completed', { requestId, riderId: finalRiderId });
     }
     callback?.({ ok: true });
   } catch (err) {

@@ -9,7 +9,7 @@ import {
   useWindowDimensions,
   Image,
   Modal,
-  Linking,
+  Linking, Animated
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons, FontAwesome } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -243,7 +243,10 @@ const destLng = parseFloat(single(params.destLng) || "88.3529");
   // "ride_completed" socket event and, if the rider navigates back early,
   // let Rider.tsx know a ride is still active.
   const requestId = single(params.requestId);
-  const driverId = single(params.driverId);  
+  const driverId = single(params.driverId);
+  // The underlying ride/pool id — needed so we know which "join_request_pending"
+  // events (a new rider wanting to join *this* car) are actually for us.
+  const rideId = single(params.rideId);  
 // Mock coordinates for the route
   const pickupCoords: Place = {
   label: pickupLabel,
@@ -358,6 +361,151 @@ return () => {
   socket.off("ride_completed", handleRideCompleted);
 };
 }, [requestId, myUserId]);
+  // Toast + journey state
+  const [journeyStarted, setJourneyStarted] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
+  const toastAnim = useRef(new Animated.Value(0)).current;
+
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    Animated.sequence([
+      Animated.timing(toastAnim, { toValue: 1, duration: 250, useNativeDriver: Platform.OS !== "web" }),
+      Animated.delay(10000),
+      Animated.timing(toastAnim, { toValue: 0, duration: 250, useNativeDriver: Platform.OS !== "web" }),
+    ]).start();
+  };
+    useEffect(() => {
+    const socket = getSocket();
+    const join = () => myUserId && socket.emit("rider_online", { riderId: myUserId });
+    if (socket.connected) join();
+    else socket.once("connect", join);
+
+    const handleRideStarted = (payload: any) => {
+      const matches = requestId ? String(payload?.requestId) === String(requestId) : true;
+      if (!matches) return;
+      setJourneyStarted(true);
+      showToast("Journey started 🚗 Have a safe ride!");
+    };
+
+    const handleRideCancelled = (payload: any) => {
+      const matches = requestId ? String(payload?.requestId) === String(requestId) : true;
+      if (!matches) return;
+      AsyncStorage.removeItem("activeRideSummary").finally(() => router.back());
+    };
+
+    const handleRideCompleted = (payload: any) => {
+      const matches = requestId ? String(payload?.requestId) === String(requestId) : true;
+      if (!matches) return;
+      AsyncStorage.removeItem("activeRideSummary").finally(() => {
+        router.replace({
+          pathname: "/feedbackForm",
+          params: { requestId, driverName, rideCode, driverId, riderId: myUserId, riderName },
+        });
+      });
+    };
+
+    socket.on("ride_started", handleRideStarted);
+    socket.on("ride_cancelled", handleRideCancelled);
+    socket.on("ride_completed", handleRideCompleted);
+    return () => {
+      socket.off("ride_started", handleRideStarted);
+      socket.off("ride_cancelled", handleRideCancelled);
+      socket.off("ride_completed", handleRideCompleted);
+    };
+  }, [requestId, myUserId]);
+
+  // ------------------------------------------------------------------ */
+  //  Incoming "someone wants to join this ride" requests                */
+  //
+  //  When another rider taps "Send Join Request" on FindRideScreen, the
+  //  server fans a `join_request_pending` event out to every rider already
+  //  in this car (identified by rideId). Whoever sees this modal first can
+  //  Allow or Deny:
+  //    - Deny  -> server closes the request immediately and tells the
+  //               requester "Oops, you were denied" — it never reaches the
+  //               driver.
+  //    - Allow -> server forwards it to the driver for the final call
+  //               (see driverDashboard.tsx). If another rider in this same
+  //               car already answered (or the request timed out / got
+  //               denied elsewhere), the server sends `join_request_closed`
+  //               so we dismiss the modal instead of acting on a stale one.
+  // ------------------------------------------------------------------ */
+  const [incomingJoinRequest, setIncomingJoinRequest] = useState<{
+    joinRequestId: string;
+    requesterName: string;
+    pickup: string;
+    destination: string;
+    seatsRequested: number;
+  } | null>(null);
+  const [joinDecisionSending, setJoinDecisionSending] = useState(false);
+    useEffect(() => {
+    const socket = getSocket();
+    const join = () => myUserId && socket.emit("rider_online", { riderId: myUserId });
+    if (socket.connected) join();
+    else socket.once("connect", join);
+
+    // The server's rideId is the DB ride id — that's `requestId` on this page.
+    // (`rideId` in the URL can be the ride *class* like "mini", so don't compare to it.)
+    const isForThisRide = (payloadRideId: any) => {
+      if (payloadRideId == null) return true;
+      const p = String(payloadRideId);
+      if (requestId && p === String(requestId)) return true;
+      if (rideId && p === String(rideId)) return true;
+      return !requestId && !rideId; // no ids known -> don't filter
+    };
+
+    const handleJoinRequestPending = (payload: any) => {
+      console.log("📩 join_request_pending received:", payload, { requestId, rideId });
+      if (!isForThisRide(payload?.rideId)) return;
+      setIncomingJoinRequest({
+        joinRequestId: String(payload.joinRequestId),
+        requesterName: payload.requesterName ?? "A rider",
+        pickup: payload.pickup ?? "—",
+        destination: payload.destination ?? "—",
+        seatsRequested: payload.seatsRequested ?? 1,
+      });
+    };
+
+    const handleJoinRequestClosed = (payload: any) => {
+      setIncomingJoinRequest((prev) =>
+        prev && String(prev.joinRequestId) === String(payload?.joinRequestId) ? null : prev
+      );
+    };
+
+    socket.on("join_request_pending", handleJoinRequestPending);
+    socket.on("join_request_closed", handleJoinRequestClosed);
+    return () => {
+      socket.off("join_request_pending", handleJoinRequestPending);
+      socket.off("join_request_closed", handleJoinRequestClosed);
+    };
+  }, [rideId, requestId, myUserId]);
+
+  const respondToJoinRequest = (decision: "allow" | "deny") => {
+    if (!incomingJoinRequest || joinDecisionSending) return;
+    setJoinDecisionSending(true);
+    getSocket().emit(
+      "join_request_rider_decision",
+      {
+        joinRequestId: incomingJoinRequest.joinRequestId,
+        rideId,
+        riderId: myUserId,
+        decision,
+      },
+      () => {
+        // No need to wait on an ack to close the sheet — the server also
+        // broadcasts `join_request_closed` to every rider in the car once
+        // it has a verdict, which covers the case where this emit's ack
+        // never arrives.
+        setJoinDecisionSending(false);
+        setIncomingJoinRequest(null);
+        showToast(
+          decision === "allow"
+            ? "You allowed the new rider — waiting on the driver."
+            : "You denied the join request."
+        );
+      }
+    );
+  };
 
   return (
     <View style={styles.root}>
@@ -367,6 +515,52 @@ return () => {
             <Ionicons name="arrow-back" size={24} color={colors.text} />
          </TouchableOpacity>
       </View>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.toast,
+          {
+            opacity: toastAnim,
+            transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [-20, 0] }) }],
+          },
+        ]}
+      >
+        <Ionicons name="checkmark-circle" size={20} color="#fff" />
+        <Text style={styles.toastText}>{toastMsg}</Text>
+      </Animated.View>
+
+      {/* "New rider wants to join" approval sheet */}
+      <Modal visible={!!incomingJoinRequest} animationType="fade" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.joinRequestSheet}>
+            <Ionicons name="people-circle" size={40} color={colors.brand} style={{ alignSelf: "center" }} />
+            <Text style={styles.joinRequestTitle}>
+              {incomingJoinRequest?.requesterName} wants to join this ride
+            </Text>
+            <Text style={styles.joinRequestSub}>
+              Pickup: {incomingJoinRequest?.pickup}{"\n"}
+              Drop-off: {incomingJoinRequest?.destination}{"\n"}
+              Seats requested: {incomingJoinRequest?.seatsRequested}
+            </Text>
+            <View style={styles.joinRequestActions}>
+              <TouchableOpacity
+                style={styles.joinDenyBtn}
+                disabled={joinDecisionSending}
+                onPress={() => respondToJoinRequest("deny")}
+              >
+                <Text style={styles.joinDenyText}>Deny</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.joinAllowBtn}
+                disabled={joinDecisionSending}
+                onPress={() => respondToJoinRequest("allow")}
+              >
+                <Text style={styles.joinAllowText}>Allow</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <ScrollView contentContainerStyle={[styles.content, isWide && styles.contentWide]} showsVerticalScrollIndicator={false}>
         
@@ -374,19 +568,32 @@ return () => {
         <View style={[styles.card, isWide && styles.cardWide]}>
           
           {/* Header */}
-          <View style={styles.cardHeader}>
-            <Text style={styles.title}>Ride accepted! 🎉</Text>
-            <Text style={styles.subtitle}>Your driver is on the way</Text>
+                    <View style={styles.cardHeader}>
+            <Text style={styles.title}>{journeyStarted ? "Journey started 🚗" : "Ride accepted! 🎉"}</Text>
+            <Text style={styles.subtitle}>
+              {journeyStarted ? "Enjoy your ride" : "Your driver is on the way"}
+            </Text>
           </View>
 
           {/* ETA Alert */}
-          <View style={styles.etaBox}>
+          {!journeyStarted && (
+            <View style={styles.etaBox}>
+              <Ionicons name="car" size={24} color={colors.brand} />
+              <View style={{ marginLeft: spacing.md }}>
+                <Text style={styles.etaSub}>Car arriving in</Text>
+                <Text style={styles.etaText}>5 min away</Text>
+              </View>
+            </View>
+          )}
+
+          {/* ETA Alert */}
+          {/* <View style={styles.etaBox}>
             <Ionicons name="car" size={24} color={colors.brand} />
             <View style={{ marginLeft: spacing.md }}>
               <Text style={styles.etaSub}>Car arriving in</Text>
               <Text style={styles.etaText}>5 min away</Text>
             </View>
-          </View>
+          </View> */}
 
           {/* Driver Info */}
           <View style={styles.driverRow}>
@@ -421,9 +628,9 @@ return () => {
               <Text style={styles.plateNumber}>{vehicleNumber}</Text>
               <Text style={styles.carDesc}>White • {vehicleModel} <Text style={styles.acBadge}> AC </Text></Text>
             </View>
-            <View style={styles.seatsWrap}>
+                       <View style={styles.seatsWrap}>
               <Ionicons name="person-outline" size={18} color={colors.text} />
-              <Text style={styles.seatsText}>{driverSeats} Seats • {seats} Riders</Text> {/* <--- UPDATE THIS LINE */}
+              <Text style={styles.seatsText}>{driverSeats} Seats • {seats} Riders</Text>
             </View>
           </View>
 
@@ -558,7 +765,25 @@ const styles = StyleSheet.create({
   cardHeader: { marginBottom: spacing.lg },
   title: { fontSize: 22, fontWeight: "800", color: colors.brand, marginBottom: 4 },
   subtitle: { fontSize: 13.5, color: colors.textMuted },
-
+    toast: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 60 : 20,
+    alignSelf: "center",
+    zIndex: 50,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: colors.pickupDot,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: radius.pill,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  toastText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   etaBox: { flexDirection: "row", alignItems: "center", backgroundColor: colors.brandTint, padding: spacing.md, borderRadius: radius.md, marginBottom: spacing.xl },
   etaSub: { fontSize: 12, color: colors.textMuted },
   etaText: { fontSize: 16, fontWeight: "800", color: colors.brandDark, marginTop: 2 },
@@ -627,4 +852,14 @@ const styles = StyleSheet.create({
   quickReplyRow: { gap: spacing.sm },
   quickReplyBtn: { backgroundColor: colors.brandTint, paddingHorizontal: 16, paddingVertical: 10, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.brandTint },
   quickReplyText: { color: colors.brandDark, fontWeight: "600", fontSize: 13 },
+
+  // Join-request approval sheet
+  joinRequestSheet: { backgroundColor: colors.white, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.xl, gap: spacing.md },
+  joinRequestTitle: { fontSize: 17, fontWeight: "800", color: colors.text, textAlign: "center", marginTop: spacing.sm },
+  joinRequestSub: { fontSize: 13.5, color: colors.textMuted, textAlign: "center", lineHeight: 20 },
+  joinRequestActions: { flexDirection: "row", gap: spacing.md, marginTop: spacing.sm },
+  joinDenyBtn: { flex: 1, paddingVertical: 14, borderRadius: radius.md, alignItems: "center", backgroundColor: colors.bgApp, borderWidth: 1, borderColor: colors.border },
+  joinDenyText: { fontWeight: "700", fontSize: 15, color: colors.text },
+  joinAllowBtn: { flex: 1, paddingVertical: 14, borderRadius: radius.md, alignItems: "center", backgroundColor: colors.brand },
+  joinAllowText: { fontWeight: "700", fontSize: 15, color: "#fff" },
 });

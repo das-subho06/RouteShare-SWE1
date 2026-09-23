@@ -176,7 +176,7 @@ export default function FeedbackForm() {
 
             {/* Description */}
             <Text style={styles.label}>Describe your experience</Text>
-            <TextInput
+                            <TextInput
               style={styles.textArea}
               placeholder="Type something here..."
               placeholderTextColor={PLACEHOLDER}
@@ -185,10 +185,10 @@ export default function FeedbackForm() {
               value={description}
               onChangeText={setDescription}
               textAlignVertical="top"
-            />                       {/* Bottom row: attach + submit */}
-            <View style={styles.bottomRow}>
-             
+            />
 
+            {/* Bottom row: submit */}
+            <View style={styles.bottomRow}>
               <TouchableOpacity
                 style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
                 onPress={handleSubmit}
@@ -202,6 +202,7 @@ export default function FeedbackForm() {
                 </Text>
               </TouchableOpacity>
             </View>
+            
 
             
           </View>
