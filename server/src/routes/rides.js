@@ -469,75 +469,120 @@ router.get('/shared', async (req, res) => {
           r.id,
           r.rider_id,
           r.driver_id,
-
+    
           r.ride_class,
           r.pickup_label,
           r.pickup_lat,
           r.pickup_lng,
-
+    
           r.destination_label,
           r.destination_lat,
           r.destination_lng,
-
+    
           r.distance_km,
           r.duration_minutes,
           r.price,
-
+    
           r.seats_requested,
           r.ride_code,
-
+    
           r.status,
           r.requested_at,
           r.accepted_at,
-
+    
           u.name AS rider_name,
-
+    
           dp.seats AS driver_total_seats,
-
+    
           du.name AS driver_name,
-
-          -- Available seats based on this ride record
-          (dp.seats - r.seats_requested) AS available_seats
-
+    
+          (
+              dp.seats -
+              COALESCE(
+                  (
+                      SELECT SUM(rp.seats_requested)
+                      FROM ride_participants rp
+                      WHERE rp.ride_id = r.id
+                        AND rp.role = 'rider'
+                        AND rp.status = 'active'
+                  ),
+                  0
+              )
+          ) AS available_seats,
+    
+          -- ADD OCCUPANTS HERE
+          (
+              SELECT COALESCE(
+                  json_agg(
+                      json_build_object(
+                          'id', u2.id,
+                          'name', u2.name,
+                          'role', 'Passenger',
+                          'seatsRequested', rp.seats_requested
+                      )
+                  ),
+                  '[]'::json
+              )
+              FROM ride_participants rp
+              JOIN users u2
+                  ON u2.id = rp.user_id
+              WHERE rp.ride_id = r.id
+                AND rp.role = 'rider'
+                AND rp.status = 'active'
+          ) AS occupants
+    
       FROM rides r
-
-      -- Rider who created the existing ride
+    
       LEFT JOIN users u
           ON u.id = r.rider_id
-
-      -- Driver profile
+    
       INNER JOIN driver_profiles dp
           ON dp.user_id = r.driver_id
-
-      -- Driver user information
+    
       LEFT JOIN users du
           ON du.id = r.driver_id
-
-          WHERE
+    
+      WHERE
           'shared_ride' = ANY(r.ride_options)
-      
+    
           AND r.driver_id IS NOT NULL
-      
-          AND r.status IN ('accepted', 'driver_arrived', 'in_progress'  )
-      
-          AND (dp.seats - r.seats_requested) >= $1
-
+    
+          AND r.status IN (
+              'accepted',
+              'driver_arrived',
+              'in_progress'
+          )
+    
+          AND (
+              dp.seats -
+              COALESCE(
+                  (
+                      SELECT SUM(rp.seats_requested)
+                      FROM ride_participants rp
+                      WHERE rp.ride_id = r.id
+                        AND rp.role = 'rider'
+                        AND rp.status = 'active'
+                  ),
+                  0
+              )
+          ) >= $1
+    
           AND r.rider_id <> $4
-      
+    
           AND r.distance_km BETWEEN
               ($2::numeric * (1 - $3::numeric))
               AND
               ($2::numeric * (1 + $3::numeric))
-      
+    
       ORDER BY
           ABS(r.distance_km - $2::numeric) ASC,
           r.requested_at ASC
       `,
       [
-        requestedSeats,
-        requestedDistance,
-        DISTANCE_TOLERANCE,
-        currentUserId
+          requestedSeats,
+          requestedDistance,
+          DISTANCE_TOLERANCE,
+          currentUserId
       ]
     );
 
@@ -565,7 +610,10 @@ router.get('/shared', async (req, res) => {
       driverRating: 0,
 
       seats: {
-        filled: Number(row.seats_requested),
+        filled:
+          Number(row.driver_total_seats) -
+          Number(row.available_seats),
+      
         total: Number(row.driver_total_seats),
       },
 
@@ -573,13 +621,7 @@ router.get('/shared', async (req, res) => {
 
       stops: [],
 
-      occupants: [
-        {
-          id: String(row.rider_id),
-          name: row.rider_name || 'Rider',
-          role: 'Passenger'
-        }
-      ],
+      occupants: row.occupants,
 
       // Useful internally/frontend later
       availableSeats: Number(row.available_seats),
@@ -657,7 +699,7 @@ router.get('/shared', async (req, res) => {
  */
 router.post('/:rideId/join-request', async (req, res) => {
   const { rideId } = req.params;
-  const { riderId } = req.body;
+  const { riderId, seatsRequested } = req.body;
 
   const client = await pool.connect();
 
@@ -666,6 +708,7 @@ router.post('/:rideId/join-request', async (req, res) => {
 
     const rideIdNumber = Number(rideId);
     const riderIdNumber = Number(riderId);
+    const seatsRequestedNumber = Number(seatsRequested);
 
     // ---------------------------------------------------------
     // 1. Validate input
@@ -673,7 +716,9 @@ router.post('/:rideId/join-request', async (req, res) => {
 
     if (
       !Number.isInteger(rideIdNumber) ||
-      !Number.isInteger(riderIdNumber)
+      !Number.isInteger(riderIdNumber) ||
+      !Number.isInteger(seatsRequestedNumber) ||
+      seatsRequestedNumber <= 0
     ) {
       await client.query('ROLLBACK');
 
@@ -698,6 +743,7 @@ router.post('/:rideId/join-request', async (req, res) => {
       FOR UPDATE
       `,
       [rideIdNumber]
+
     );
 
     if (rideResult.rows.length === 0) {
@@ -709,7 +755,61 @@ router.post('/:rideId/join-request', async (req, res) => {
     }
 
     const ride = rideResult.rows[0];
-
+    const capacityResult = await client.query(
+      `
+      SELECT
+          dp.seats AS total_seats,
+    
+          COALESCE(
+            SUM(rp.seats_requested)
+            FILTER (
+              WHERE rp.role = 'rider'
+                AND rp.status = 'active'
+            ),
+            0
+          ) AS occupied_seats
+    
+      FROM driver_profiles dp
+    
+      LEFT JOIN ride_participants rp
+          ON rp.ride_id = $1
+    
+      WHERE dp.user_id = $2
+    
+      GROUP BY dp.seats
+      `,
+      [
+        rideIdNumber,
+        ride.driver_id
+      ]
+    );
+    if (capacityResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+    
+      return res.status(400).json({
+        error: 'Driver seat information not found.'
+      });
+    }
+    
+    const totalSeats = Number(
+      capacityResult.rows[0].total_seats
+    );
+    
+    const occupiedSeats = Number(
+      capacityResult.rows[0].occupied_seats
+    );
+    
+    const availableSeats =
+      totalSeats - occupiedSeats;
+      if (availableSeats < seatsRequestedNumber) {
+        await client.query('ROLLBACK');
+      
+        return res.status(400).json({
+          error: 'Not enough seats available in this shared ride.',
+          availableSeats,
+          seatsRequested: seatsRequestedNumber
+        });
+      }
     // ---------------------------------------------------------
     // 3. Check shared ride
     // ---------------------------------------------------------
@@ -860,13 +960,15 @@ router.post('/:rideId/join-request', async (req, res) => {
       (
         ride_id,
         rider_id,
+        seats_requested,
         status
       )
       VALUES
       (
         $1,
         $2,
-        $3
+        $3,
+        $4
       )
       RETURNING
         id,
@@ -878,6 +980,7 @@ router.post('/:rideId/join-request', async (req, res) => {
       [
         rideIdNumber,
         riderIdNumber,
+        seatsRequestedNumber,
         initialStatus
       ]
     );
@@ -921,11 +1024,13 @@ router.post('/:rideId/join-request', async (req, res) => {
         passengers.length === 0
           ? 'Join request sent to driver.'
           : 'Join request sent to all passengers for approval.',
-
+    
       requestId: request.id,
-
+      rideId: request.ride_id,
+      riderId: request.rider_id,
+      seatsRequested: request.seats_requested,
       status: request.status,
-
+    
       passengerApprovalsRequired:
         passengers.length
     });
@@ -1039,13 +1144,24 @@ router.post('/join-requests/:requestId/passenger-response', async (req, res) => 
     const requestResult = await client.query(
       `
       SELECT
-          rjr.id,
-          rjr.ride_id,
-          rjr.rider_id,
-          rjr.status
-      FROM ride_join_requests rjr
-      WHERE rjr.id = $1
-      FOR UPDATE
+    rjr.id,
+    rjr.ride_id,
+    rjr.rider_id,
+    rjr.seats_requested,
+    rjr.status,
+
+    r.driver_id,
+    r.status AS ride_status,
+    r.ride_options
+
+FROM ride_join_requests rjr
+
+JOIN rides r
+    ON r.id = rjr.ride_id
+
+WHERE rjr.id = $1
+
+FOR UPDATE OF rjr, r
       `,
       [requestIdNumber]
     );
@@ -1269,5 +1385,369 @@ router.post('/join-requests/:requestId/passenger-response', async (req, res) => 
 
   }
 });
+
+/**
+ * @swagger
+ * /api/rides/driver/join-requests/{driverId}:
+ *   get:
+ *     summary: Get shared ride join requests waiting for driver approval
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: driverId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         example: 4
+ *     responses:
+ *       200:
+ *         description: Join requests waiting for driver approval
+ *       500:
+ *         description: Could not fetch driver join requests
+ */
+router.get('/driver/join-requests/:driverId', async (req, res) => {
+  const { driverId } = req.params;
+
+  try {
+    const driverIdNumber = Number(driverId);
+
+    if (!Number.isInteger(driverIdNumber)) {
+      return res.status(400).json({
+        error: 'Invalid driverId.'
+      });
+    }
+
+    const result = await pool.query(
+      `
+      SELECT
+          rjr.id AS request_id,
+          rjr.ride_id,
+          rjr.rider_id,
+          rjr.status,
+          rjr.requested_at,
+
+          u.name AS rider_name,
+
+          r.pickup_label,
+          r.destination_label,
+          r.distance_km,
+          r.duration_minutes,
+          r.ride_class,
+          r.seats_requested,
+          r.ride_code
+
+      FROM ride_join_requests rjr
+
+      JOIN rides r
+          ON r.id = rjr.ride_id
+
+      JOIN users u
+          ON u.id = rjr.rider_id
+
+      WHERE r.driver_id = $1
+        AND rjr.status = 'waiting_driver'
+
+      ORDER BY rjr.requested_at ASC
+      `,
+      [driverIdNumber]
+    );
+
+    const requests = result.rows.map((row) => ({
+      requestId: row.request_id,
+      rideId: row.ride_id,
+
+      riderId: row.rider_id,
+      riderName: row.rider_name,
+
+      status: row.status,
+
+      pickup: row.pickup_label,
+      destination: row.destination_label,
+
+      distanceKm: Number(row.distance_km),
+      durationMinutes: Number(row.duration_minutes),
+
+      rideClass: row.ride_class,
+      seatsRequested: row.seats_requested,
+
+      rideCode: row.ride_code,
+
+      requestedAt: row.requested_at
+    }));
+
+    return res.json(requests);
+
+  } catch (err) {
+    console.error(
+      'Driver join requests error:',
+      err
+    );
+
+    return res.status(500).json({
+      error: 'Could not fetch driver join requests.'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/rides/join-requests/{requestId}/driver-response:
+ *   post:
+ *     summary: Approve or reject a shared ride join request
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: requestId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         example: 2
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - driverId
+ *               - decision
+ *             properties:
+ *               driverId:
+ *                 type: integer
+ *                 example: 4
+ *               decision:
+ *                 type: string
+ *                 enum:
+ *                   - approved
+ *                   - rejected
+ *                 example: approved
+ *     responses:
+ *       200:
+ *         description: Driver response recorded successfully
+ *       400:
+ *         description: Invalid request
+ *       403:
+ *         description: Driver is not authorized for this ride
+ *       404:
+ *         description: Join request not found
+ *       500:
+ *         description: Could not process driver response
+ */
+router.post(
+  '/join-requests/:requestId/driver-response',
+  async (req, res) => {
+
+    const { requestId } = req.params;
+    const { driverId, decision } = req.body;
+
+    const client = await pool.connect();
+
+    try {
+
+      await client.query('BEGIN');
+
+      const requestIdNumber = Number(requestId);
+      const driverIdNumber = Number(driverId);
+
+      // -----------------------------
+      // 1. Validate IDs
+      // -----------------------------
+      if (
+        !Number.isInteger(requestIdNumber) ||
+        !Number.isInteger(driverIdNumber)
+      ) {
+
+        await client.query('ROLLBACK');
+
+        return res.status(400).json({
+          error: 'Invalid requestId or driverId.'
+        });
+      }
+
+      // -----------------------------
+      // 2. Validate decision
+      // -----------------------------
+      if (!['approved', 'rejected'].includes(decision)) {
+
+        await client.query('ROLLBACK');
+
+        return res.status(400).json({
+          error: "Decision must be either 'approved' or 'rejected'."
+        });
+      }
+
+      // -----------------------------
+      // 3. Get join request + ride
+      // -----------------------------
+      const requestResult = await client.query(
+        `
+        SELECT
+            rjr.id,
+            rjr.ride_id,
+            rjr.rider_id,
+            rjr.status,
+
+            r.driver_id,
+            r.status AS ride_status,
+            r.ride_options
+
+        FROM ride_join_requests rjr
+
+        JOIN rides r
+            ON r.id = rjr.ride_id
+
+        WHERE rjr.id = $1
+
+        FOR UPDATE OF rjr, r
+        `,
+        [requestIdNumber]
+      );
+
+      // -----------------------------
+      // 4. Request not found
+      // -----------------------------
+      if (requestResult.rows.length === 0) {
+
+        await client.query('ROLLBACK');
+
+        return res.status(404).json({
+          error: 'Join request not found.'
+        });
+      }
+
+      const request = requestResult.rows[0];
+
+      // -----------------------------
+      // 5. Verify driver
+      // -----------------------------
+      if (Number(request.driver_id) !== driverIdNumber) {
+
+        await client.query('ROLLBACK');
+
+        return res.status(403).json({
+          error: 'You are not the driver of this ride.'
+        });
+      }
+
+      // -----------------------------
+      // 6. Request must be waiting
+      // -----------------------------
+      if (request.status !== 'waiting_driver') {
+
+        await client.query('ROLLBACK');
+
+        return res.status(400).json({
+          error: 'This join request is not waiting for driver approval.',
+          status: request.status
+        });
+      }
+
+      // =====================================================
+      // REJECT
+      // =====================================================
+
+      if (decision === 'rejected') {
+
+        await client.query(
+          `
+          UPDATE ride_join_requests
+          SET
+              status = 'rejected',
+              responded_at = CURRENT_TIMESTAMP
+          WHERE id = $1
+          `,
+          [requestIdNumber]
+        );
+
+        await client.query('COMMIT');
+
+        return res.status(200).json({
+          message: 'Join request rejected by driver.',
+          requestId: requestIdNumber,
+          status: 'rejected'
+        });
+      }
+
+      // =====================================================
+      // APPROVE
+      // =====================================================
+
+      await client.query(
+        `
+        INSERT INTO ride_participants
+        (
+          ride_id,
+          user_id,
+          role,
+          seats_requested,
+          status
+        )
+        VALUES
+        (
+          $1,
+          $2,
+          'rider',
+          $3,
+          'active'
+        )
+        ON CONFLICT (ride_id, user_id)
+        DO UPDATE SET
+          status = 'active',
+          seats_requested = EXCLUDED.seats_requested
+        `,
+        [
+          request.ride_id,
+          request.rider_id,
+          request.seats_requested
+        ]
+      );
+
+      // -----------------------------
+      // 7. Update join request
+      // -----------------------------
+      await client.query(
+        `
+        UPDATE ride_join_requests
+        SET
+            status = 'approved',
+            responded_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+        `,
+        [requestIdNumber]
+      );
+
+      await client.query('COMMIT');
+
+      // -----------------------------
+      // 8. Success response
+      // -----------------------------
+      return res.status(200).json({
+        message: 'Rider approved and added to the shared ride.',
+        requestId: requestIdNumber,
+        rideId: request.ride_id,
+        riderId: request.rider_id,
+        status: 'approved'
+      });
+
+    } catch (err) {
+
+      await client.query('ROLLBACK');
+
+      console.error(
+        'Driver response error:',
+        err
+      );
+
+      return res.status(500).json({
+        error: 'Could not process driver response.'
+      });
+
+    } finally {
+
+      client.release();
+
+    }
+  }
+);
 
 module.exports = router;
