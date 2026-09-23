@@ -1,9 +1,7 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Slot } from 'expo-router';
+import { DarkTheme, DefaultTheme, ThemeProvider } from "expo-router/react-navigation";
+import { Slot, Stack, usePathname } from 'expo-router';
 import { useColorScheme } from 'react-native';
-import {Stack} from 'expo-router';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
-import { usePathname } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import RouteTransitionOverlay from '../components/RouteTransitionOverlay';
 

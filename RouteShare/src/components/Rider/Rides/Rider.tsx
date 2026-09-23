@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState,useEffect, useRef } from "react";
-import { useFocusEffect } from "@react-navigation/native"; 
+import { useFocusEffect } from "expo-router/react-navigation"; 
 import { TextInput } from "react-native";
 import {
   View,

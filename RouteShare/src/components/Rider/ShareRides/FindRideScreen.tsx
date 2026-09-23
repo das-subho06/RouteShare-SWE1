@@ -123,7 +123,7 @@ const MOCK_RIDES: RideMatch[] = [
       { id: 's5', label: 'Dum Dum', sublabel: 'Riya (Driver)', kind: 'active', x: 82, y: 8 },
     ],
     occupants: [
-      { id: 'o1', name: 'Priya S.', role: 'Driver' },
+      { id: 'o1', name: 'Prayas S.', role: 'Passenger' },
       { id: 'o2', name: 'Arjun M.', role: 'Passenger' },
     ],
   },
@@ -136,7 +136,7 @@ const MOCK_RIDES: RideMatch[] = [
     ac: true,
     driverName: 'Priya S.',
     driverRating: 4.8,
-    seats: { filled: 2, total: 4 },
+    seats: { filled: 1, total: 4 },
     pricePerRider: 85,
     stops: [
       { id: 's1', label: 'Newtown', sublabel: 'Route start', kind: 'pickup', x: 78, y: 78 },
@@ -144,8 +144,8 @@ const MOCK_RIDES: RideMatch[] = [
       { id: 's3', label: 'Dum Dum', sublabel: 'Route end', kind: 'dropoff', x: 82, y: 8 },
     ],
     occupants: [
-      { id: 'o1', name: 'Priya S.', role: 'Driver' },
-      { id: 'o2', name: 'Rahul K.', role: 'Passenger' },
+      // { id: 'o1', name: 'Priya S.', role: 'Driver' },
+      { id: 'o1', name: 'Rahul K.', role: 'Passenger' },
     ],
   },
   {
@@ -157,7 +157,7 @@ const MOCK_RIDES: RideMatch[] = [
     ac: true,
     driverName: 'Priya S.',
     driverRating: 4.8,
-    seats: { filled: 2, total: 4 },
+    seats: { filled: 1, total: 4 },
     pricePerRider: 85,
     etaToNearestStopMinutes: 8,
     stops: [
@@ -166,8 +166,8 @@ const MOCK_RIDES: RideMatch[] = [
       { id: 's3', label: 'Dum Dum', sublabel: 'Route end', kind: 'dropoff', x: 82, y: 8 },
     ],
     occupants: [
-      { id: 'o1', name: 'Priya S.', role: 'Driver' },
-      { id: 'o2', name: 'Meera D.', role: 'Passenger' },
+      // { id: 'o1', name: 'Priya S.', role: 'Driver' },
+      { id: 'o1', name: 'Meera D.', role: 'Passenger' },
     ],
   },
 ];
@@ -443,6 +443,12 @@ export default function FindRideScreen() {
     () => rides.find((r) => r.id === selectedRideId) ?? null,
     [rides, selectedRideId]
   );
+  const handleStartOwnRide = () => {
+  router.push({
+    pathname: "/rider",
+    params: { name: riderName, username: riderName },
+  });
+};
   const handleSidebarSelect = (key: string) => {
     if (key === "activity") {
       router.push({
@@ -582,6 +588,7 @@ export default function FindRideScreen() {
             destination={destination?.label ?? ''}
             rides={rides}
             onSelectRide={handleSelectRide}
+            onStartOwnRide={handleStartOwnRide}
           />
         )}
 
@@ -620,8 +627,8 @@ function Header({ view, onBack }: { view: ViewState; onBack?: () => void }) {
           <Text style={styles.backButtonText}>{'‹'}</Text>
         </TouchableOpacity>
       ) : (
-        <View style={styles.logoBadge}>
-          <Text style={styles.logoBadgeEmoji}>🚗</Text>
+        <View >
+          {/* <Text style={styles.logoBadgeEmoji}>🚗</Text> */}
         </View>
       )}
       <View style={{ flex: 1 }}>
@@ -667,7 +674,7 @@ function SearchCard({
     <View style={styles.sideBySideRow}>
       {/* Left Column: Form Card */}
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Request a ride</Text>
+        <Text style={styles.cardTitle}>Request a shared ride</Text>
 
         <TouchableOpacity style={styles.cityRow} onPress={() => setCityModal(true)}>
           <Ionicons name="location" size={16} color={colors.text} />
@@ -701,7 +708,7 @@ function SearchCard({
             onClear={onClearDestination}
           />
           <TouchableOpacity style={styles.searchButton} onPress={onSearch} activeOpacity={0.85}>
-            <Text style={styles.searchButtonText}>🔍 Search</Text>
+            <Text style={styles.searchButtonText}> Search</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -1050,11 +1057,13 @@ function ResultsList({
   destination,
   rides,
   onSelectRide,
+  onStartOwnRide,
 }: {
   pickup: string;
   destination: string;
   rides: RideMatch[];
   onSelectRide: (id: string) => void;
+  onStartOwnRide: () => void;
 }) {
   return (
     <View style={{ marginTop: 20 }}>
@@ -1074,6 +1083,15 @@ function ResultsList({
           <Text style={styles.emptyStateText}>
             No rides found from {pickup} to {destination} right now. Try again in a few minutes.
           </Text>
+           <TouchableOpacity
+            style={styles.startOwnRideButton}
+            onPress={onStartOwnRide}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.startOwnRideButtonText}>
+              You can start your own share ride and let other riders join in
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
     </View>
@@ -1554,6 +1572,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 13,
   },
+  startOwnRideButton: {
+  marginTop: 14,
+  backgroundColor: COLORS.coral,
+  borderRadius: 14,
+  paddingVertical: 14,
+  paddingHorizontal: 16,
+  alignItems: 'center',
+},
+startOwnRideButtonText: {
+  color: '#fff',
+  fontWeight: '700',
+  fontSize: 14,
+  textAlign: 'center',
+},
   driverName: {
     fontWeight: '700',
     color: COLORS.text,

@@ -1,6 +1,8 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Video, ResizeMode } from 'expo-av';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { useRouter } from 'expo-router';
+// at the top with your other imports
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Toast from '@/components/Toast';
 import {
   View,
@@ -51,7 +53,7 @@ const PLAN_CARD_GAP = 20;
 // Source file is 711x790, transparent background.
 const HERO_TAXI_IMG = require('../../assets/images/hero-taxi-phone.png');
 const HERO_TAXI_ASPECT_RATIO = 711 / 790;
-const LOGO_IMG = require('../../assets/images/logoRemovebg.png');
+const LOGO_IMG = require('../../assets/images/logoSidebar.png');
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -63,7 +65,22 @@ interface Plan {
   body: string;
   more: string;
   highlighted?: boolean;
+  mobileBg?: string;
+  mobileIcon?: string;
 }
+
+// Mobile card colors — matches the light, pastel card look from the mobile
+// design reference (blue / pink / teal), independent of the desktop coral
+// "highlighted" treatment.
+const MOBILE_PLAN_STYLE: Record<string, { bg: string; icon: string }> = {
+  city: { bg: '#bfe6f5', icon: '☀️' },
+  state: { bg: '#fbdbe0', icon: '🚶' },
+  country: { bg: '#c9e9ea', icon: '📱' },
+  airport: { bg: '#d9e3f5', icon: '✈️' },
+  corporate: { bg: '#e3ddf5', icon: '💼' },
+  events: { bg: '#f5e3d9', icon: '🎉' },
+  night: { bg: '#dbe0ea', icon: '🌙' },
+};
 
 const PLANS: Plan[] = [
   {
@@ -224,14 +241,17 @@ function PlanCard({
   expanded,
   onToggle,
   cardWidth,
+  isWide = true,
 }: {
   plan: Plan;
   expanded: boolean;
   onToggle: () => void;
   cardWidth?: number;
+  isWide?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const scale = useRef(new Animated.Value(1)).current;
+  const mobileStyle = MOBILE_PLAN_STYLE[plan.id];
 
   React.useEffect(() => {
     Animated.timing(scale, {
@@ -251,11 +271,15 @@ function PlanCard({
         style={[
           styles.planCard,
           cardWidth ? { width: cardWidth } : null,
-          plan.highlighted && styles.planCardHighlighted,
+          isWide && plan.highlighted && styles.planCardHighlighted,
+          !isWide && mobileStyle && { backgroundColor: mobileStyle.bg },
           { transform: [{ scale }] },
         ]}
       >
-        {plan.highlighted && (
+        {!isWide && mobileStyle && (
+          <Text style={mobileStyles.planCardIcon}>{mobileStyle.icon}</Text>
+        )}
+        {isWide && plan.highlighted && (
   <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.8 }}>
   <CardBgSvg
     width="100%"
@@ -264,7 +288,7 @@ function PlanCard({
   />
 </View>
   )}
-          {plan.id === 'state' && (
+          {isWide && plan.id === 'state' && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.5 }}>
             <CardBgSvg2
               width="100%"
@@ -273,7 +297,7 @@ function PlanCard({
             />
           </View>
         )}
-        {plan.id === 'country' && (
+        {isWide && plan.id === 'country' && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.5 }}>
             <CardBgSvg3
               width="100%"
@@ -282,7 +306,7 @@ function PlanCard({
             />
           </View>
         )}
-         {plan.id === 'airport' && (
+         {isWide && plan.id === 'airport' && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.5 }}>
             <CardBgSvg4
               width="100%"
@@ -291,7 +315,7 @@ function PlanCard({
             />
           </View>
         )}
-         {plan.id === 'corporate' && (
+         {isWide && plan.id === 'corporate' && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.5 }}>
             <CardBgSvg5
               width="100%"
@@ -300,7 +324,7 @@ function PlanCard({
             />
           </View>
         )}
-         {plan.id === 'events' && (
+         {isWide && plan.id === 'events' && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.5 }}>
             <CardBgSvg6
               width="100%"
@@ -309,7 +333,7 @@ function PlanCard({
             />
           </View>
         )}
-         {plan.id === 'night' && (
+         {isWide && plan.id === 'night' && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.5 }}>
             <CardBgSvg7
               width="100%"
@@ -353,6 +377,7 @@ export default function RouteShareLanding() {
   const [heroSize, setHeroSize] = useState({ width: 0, height: 0 });
   const [expandedPlan, setExpandedPlan] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalKind>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   // form state
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPass, setLoginPass] = useState('');
@@ -375,6 +400,42 @@ const [driverName, setDriverName] = useState('');
   const [showVerifiedToast, setShowVerifiedToast] = useState(false);
 
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const heroPlayer = useVideoPlayer(require('../../assets/videos/hero-bg.mp4'), (player) => {
+  player.loop = true;
+  player.muted = true;
+  player.volume = 0;
+
+});
+useEffect(() => {
+  const subscription = heroPlayer.addListener('statusChange', ({ status }) => {
+    if (status === 'readyToPlay') {
+      heroPlayer.play();
+    }
+  });
+  return () => subscription.remove();
+}, [heroPlayer]);
+
+// Mobile hero video — replaces the car illustration on narrow screens.
+// Drop your clip at assets/videos/hero-mobile-car.mp4 (rename below if you
+// use a different filename).
+const mobileHeroPlayer = useVideoPlayer(
+  require('../../assets/videos/hero-bg.mp4'),
+  (player) => {
+    player.loop = true;
+    player.muted = true;
+    player.volume = 0;
+  }
+);
+useEffect(() => {
+  const subscription = mobileHeroPlayer.addListener('statusChange', ({ status }) => {
+    if (status === 'readyToPlay') {
+      mobileHeroPlayer.play();
+    }
+  });
+  return () => subscription.remove();
+}, [mobileHeroPlayer]);
+
 useEffect(() => {
   if (modal === 'signup' && showDriverDetails && driverOnboardingDone) {
     setModal(null);           // close the signup modal
@@ -473,49 +534,109 @@ const scrollPlans = (direction: 1 | -1) => {
     <View style={styles.root}>
       <ScrollView ref={scrollRef} showsVerticalScrollIndicator={true} contentContainerStyle={{ flexGrow: 0 }}>
         {/* -------------------------------------------------------------- */}
+        {/* MOBILE TOP BAR (separate white header, matches mobile mock)   */}
+        {/* -------------------------------------------------------------- */}
+        {!isWide && (
+           <View style={[mobileStyles.topBar, { paddingTop: insets.top + 8 }]}>
+            <View style={mobileStyles.topBarLogoRow}>
+              <Image
+                source={require('../../assets/images/logoSidebar.png')}
+                style={mobileStyles.topBarLogoImage}
+                resizeMode="contain"
+              />
+              <Text style={mobileStyles.topBarLogoText}>
+                Route<Text style={{ color: COLORS.coral }}>Share</Text>
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => setMobileMenuOpen((v) => !v)}
+              style={mobileStyles.hamburgerBtn}
+              hitSlop={10}
+            >
+              <View style={mobileStyles.hamburgerLine} />
+              <View style={mobileStyles.hamburgerLine} />
+              <View style={mobileStyles.hamburgerLine} />
+            </Pressable>
+
+            {mobileMenuOpen && (
+              <View style={mobileStyles.mobileMenuDropdown}>
+                {[
+                  { label: 'Home', onPress: () => scrollToSection('home') },
+                  { label: 'About', onPress: () => scrollToSection('subscriptions') },
+                  { label: 'Login', onPress: () => setModal('login') },
+                  { label: 'Sign up', onPress: () => setModal('signup') },
+                  { label: 'Contact', onPress: () => setModal('contact') },
+                ].map((item) => (
+                  <Pressable
+                    key={item.label}
+                    style={mobileStyles.mobileMenuItem}
+                    onPress={() => {
+                      setMobileMenuOpen(false);
+                      item.onPress();
+                    }}
+                  >
+                    <Text style={mobileStyles.mobileMenuItemText}>{item.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* -------------------------------------------------------------- */}
         {/* HERO                                                          */}
         {/* -------------------------------------------------------------- */}
         <View
-          style={styles.hero}
+          style={[styles.hero, !isWide && mobileStyles.hero]}
           onLayout={(e) => {
             registerSection('home')(e);
             const { width, height } = e.nativeEvent.layout;
             setHeroSize({ width, height });
           }}
         >
-           {heroSize.width > 0 && (
-            <Video
-              source={require('../../assets/videos/hero-bg.mp4')}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: heroSize.width,
-                height: heroSize.height,
-                zIndex:0
-              }}
-              resizeMode={ResizeMode.COVER}
-              isLooping
-              shouldPlay
-              isMuted
-              volume={0}
-              useNativeControls={false}
-              pointerEvents="none"
-            />
-          )}
-
-          {/* Nav */}
-          <View style={[styles.navRow, isWide && styles.navRowWide]}
-          renderToHardwareTextureAndroid>
-            <View style={styles.logoBox}>
-  <Image
-    source={require('../../assets/images/logoRemovebg.png')}
-    style={styles.logoImage}
-    resizeMode="contain"
+           
+{isWide && heroSize.width > 0 && (
+  <VideoView
+    player={heroPlayer}
+    style={{
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      width: '48%',
+      height: heroSize.height,
+      zIndex: 0,
+    }}
+    contentFit="cover"
+    nativeControls={false}
+    pointerEvents="none"
   />
-</View>
-            
-            {isWide && (
+)}
+{isWide && heroSize.width > 0 && (
+  <View
+    style={{
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      width: '52%',
+      height: heroSize.height,
+      backgroundColor: COLORS.ink,
+      zIndex: 1,
+    }}
+    pointerEvents="none"
+  />
+)}
+
+          {/* Nav — desktop only; mobile uses the white top bar above */}
+          {isWide && (
+            <View style={[styles.navRow, styles.navRowWide]}
+            renderToHardwareTextureAndroid>
+              <View style={styles.logoBox}>
+                <Image
+                  source={require('../../assets/images/logoSidebar.png')}
+                  style={styles.logoImage}
+                  resizeMode="contain"
+                />
+              </View>
               <View style={styles.navLinks}>
                 <NavLink label="Home" active onPress={() => scrollToSection('home')} />
                 <NavLink label="About" onPress={() => scrollToSection('subscriptions')} />
@@ -523,40 +644,34 @@ const scrollPlans = (direction: 1 | -1) => {
                 <NavLink label="Sign up" onPress={() => setModal('signup')} />
                 <NavLink label="Contact" onPress={() => setModal('contact')} />
               </View>
-            )}
-          </View>
-          {!isWide && (
-            <View style={styles.navLinksMobile}>
-              <NavLink label="Home" active onPress={() => scrollToSection('home')} />
-              <NavLink label="About" onPress={() => scrollToSection('subscriptions')} />
-              <NavLink label="Login" onPress={() => setModal('login')} />
-              <NavLink label="Sign up" onPress={() => setModal('signup')} />
-              <NavLink label="Contact" onPress={() => setModal('contact')} />
             </View>
           )}
 
           <View style={[styles.heroBody, isWide && styles.heroBodyWide]}
           renderToHardwareTextureAndroid>
             <View style={styles.heroText}>
-              <Text style={styles.heroHeadline}>Need a{'\n'}Ride</Text>
+              <Text style={[styles.heroHeadline, !isWide && mobileStyles.heroHeadline]}>
+                Need a{'\n'}Ride
+              </Text>
               <View style={styles.heroButtons}>
                 <PillButton label="Book now" onPress={() => setModal('login')} />
                 <PillButton label="Call" variant="dark" onPress={handleCall} />
               </View>
             </View>
-            {/* <Image
-              source={HERO_TAXI_IMG}
-              style={[
-                styles.heroImage,
-                { aspectRatio: HERO_TAXI_ASPECT_RATIO },
-                isWide && styles.heroImageWide,
-              ]}
-              resizeMode="contain"
-            /> */}
           </View>
+{!isWide && <TopWaveDivider />}
+          {!isWide && (
+            <VideoView
+              player={mobileHeroPlayer}
+              style={mobileStyles.heroIllustration}
+              contentFit="cover"
+              nativeControls={false}
+              pointerEvents="none"
+            />
+          )}
 
           <WaveDivider />
-          {isWide ? (
+          {isWide && (
             <Image
               source={HERO_TAXI_IMG}
               style={[
@@ -567,16 +682,7 @@ const scrollPlans = (direction: 1 | -1) => {
               resizeMode="contain"
               pointerEvents="none"
             />
-          ) : (
-            <View style={mobileStyles.heroImageWrap} pointerEvents="none">
-              <Image
-                source={HERO_TAXI_IMG}
-                style={mobileStyles.heroImage}
-                resizeMode="contain"
-              />
-            </View>
           )}
-          
         </View>
         {/* -------------------------------------------------------------- */}
 {/* SUBSCRIPTIONS                                                 */}
@@ -619,6 +725,7 @@ const scrollPlans = (direction: 1 | -1) => {
           expanded={expandedPlan === plan.id}
           onToggle={() => setExpandedPlan(expandedPlan === plan.id ? null : plan.id)}
           cardWidth={!isWide ? mobileCardWidth : undefined}
+          isWide={isWide}
         />
       ))}
     </ScrollView>
@@ -638,11 +745,19 @@ const scrollPlans = (direction: 1 | -1) => {
           </Text>
           <Text style={[styles.sectionCaret, { color: COLORS.white }]}>▾</Text>
 
-          <View style={[styles.benefitsGrid, isWide && styles.benefitsGridWide]}>
+          <View
+            style={[
+              styles.benefitsGrid,
+              isWide ? styles.benefitsGridWide : mobileStyles.benefitsGrid,
+            ]}
+          >
             {BENEFITS.map((b) => (
               <View
                 key={b.id}
-                style={[styles.benefitItem, isWide && styles.benefitItemWide]}
+                style={[
+                  styles.benefitItem,
+                  isWide ? styles.benefitItemWide : mobileStyles.benefitItem,
+                ]}
               >
                 <View style={styles.benefitIconCircle}>
                   <Text style={styles.benefitIconText}>{b.icon}</Text>
@@ -668,11 +783,13 @@ const scrollPlans = (direction: 1 | -1) => {
           </Text>
           <View style={styles.heroButtons}>
             <PillButton label="Sign up" onPress={() => setModal('signup')} />
-            <PillButton
-              label="Contact us"
-              variant="outline"
-              onPress={() => setModal('contact')}
-            />
+            {isWide && (
+              <PillButton
+                label="Contact us"
+                variant="outline"
+                onPress={() => setModal('contact')}
+              />
+            )}
           </View>
           <Text style={styles.footerCopyright}>
             © {new Date().getFullYear()} routeshare. All rights reserved.
@@ -854,10 +971,23 @@ function WaveDivider() {
     </Svg>
   );
 }
+// Top wave — mirror of WaveDivider, sits between the white header and the video.
+function TopWaveDivider() {
+  return (
+    <Svg
+      viewBox="0 0 1440 320"
+      style={mobileStyles.topWave}
+      preserveAspectRatio="none"
+      pointerEvents="none"
+    >
+      <Path
+        fill="#8fd6ef"
+        d="M0,200 C160,100 320,100 480,170 C640,240 800,280 960,250 C1120,220 1280,180 1440,230 L1440,0 L0,0 Z"
+      />
+    </Svg>
+  );
+}
 
-// ---------------------------------------------------------------------------
-// Nav link
-// ---------------------------------------------------------------------------
 const NAV_LINK_LINE_HEIGHT = 20;
 
 function NavLink({
@@ -956,6 +1086,107 @@ const mobileStyles = StyleSheet.create({
     alignSelf: 'center',
     gap: 0,
   },
+
+  // Mobile top bar --------------------------------------------------------
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: COLORS.white,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 14,
+    position: 'relative',
+    zIndex: 20,
+  },
+  topBarLogoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  topBarLogoImage: {
+    width: 34,
+    height: 34,
+  },
+  topBarLogoText: {
+    fontSize: 19,
+    fontWeight: '800',
+    color: COLORS.ink,
+  },
+  hamburgerBtn: {
+    width: 26,
+    height: 18,
+    justifyContent: 'space-between',
+  },
+  hamburgerLine: {
+    width: '100%',
+    height: 2,
+    backgroundColor: COLORS.ink,
+    borderRadius: 1,
+  },
+  mobileMenuDropdown: {
+    position: 'absolute',
+    top: '100%',
+    right: 20,
+    backgroundColor: COLORS.white,
+    borderRadius: 12,
+    paddingVertical: 6,
+    minWidth: 150,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+    zIndex: 30,
+  },
+  mobileMenuItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+  mobileMenuItemText: {
+    fontSize: 14.5,
+    fontWeight: '600',
+    color: COLORS.ink,
+  },
+
+  // Mobile hero -------------------------------------------------------------
+  hero: {
+    backgroundColor: '#8fd6ef',
+    paddingTop: 20,
+    overflow: 'hidden',
+  },
+  heroHeadline: {
+    color: COLORS.ink,
+  },
+  heroIllustration: {
+    width: '120%',
+    left:-100,
+    height: 200,
+    marginTop: -340,
+    backgroundColor: '#22b8db',
+  },
+
+  // Mobile plan cards --------------------------------------------------------
+  planCardIcon: {
+    fontSize: 22,
+    marginBottom: 10,
+  },
+
+  // Mobile benefits grid ------------------------------------------------------
+  benefitsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  benefitItem: {
+    width: '48%',
+    marginBottom: 22,
+  },
+  topWave: {
+  width: '100%',
+  height: 60,
+  marginTop: -1, // tucks it flush against the header, no white seam
+},
 });
 
 const styles = StyleSheet.create({
@@ -976,6 +1207,7 @@ const styles = StyleSheet.create({
     left: 0,
     width: '100%',
     height: 100,
+    zIndex: 2,
   },
   navRow: {
     flexDirection: 'row',
@@ -994,18 +1226,16 @@ const styles = StyleSheet.create({
   height: 32,
   },
   logoBox: {
-  width: 40,          // keep this matching the ORIGINAL footprint you already have
+  width: 40,
   height: 40,
-  justifyContent: 'flex-start',
-  alignItems: 'flex-start',
-  overflow: 'visible',  // <-- key: lets the image spill outside the box
+  justifyContent: 'center',
+  alignItems: 'center',
 },
 logoImage: {
-  top:-70,
-  left:-20,
-  width: 300,           // <-- crank this as big as you want
-  height: 300,
-  position: 'absolute', // <-- pulled out of flex flow, so it can't push siblings
+  top:10,
+  left:70,
+  width: 170,
+  height: 170,
 },
   navLinks: {
     flexDirection: 'row',
@@ -1327,6 +1557,10 @@ modalScrollContent: {
     color: COLORS.ink,
   },
 });
+
+
+
+
 
 
 

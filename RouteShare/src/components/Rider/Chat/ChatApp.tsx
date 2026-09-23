@@ -19,7 +19,7 @@ import { BlurView } from 'expo-blur';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import { Audio } from 'expo-av';
+import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder, createAudioPlayer, AudioPlayer } from 'expo-audio';
 import {Sidebar} from '../Sidebar';
 // ---------------------------------------------------------------------------
 // Types
@@ -179,9 +179,8 @@ export default function ChatApp() {
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [playProgress, setPlayProgress] = useState(0);
   const playTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  const recordingRef = useRef<Audio.Recording | null>(null);
-  const soundRef = useRef<Audio.Sound | null>(null);
-
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const soundRef = useRef<AudioPlayer | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const listRef = useRef<FlatList<Message>>(null);
   const pulse = useRef(new Animated.Value(1)).current;
@@ -213,13 +212,15 @@ export default function ChatApp() {
   }, [callType]);
 
   useEffect(() => {
-    return () => {
-      if (recordTimer.current) clearInterval(recordTimer.current);
-      if (playTimer.current) clearInterval(playTimer.current);
-      recordingRef.current?.stopAndUnloadAsync().catch(() => {});
-      soundRef.current?.unloadAsync().catch(() => {});
-    };
-  }, []);
+  return () => {
+    if (recordTimer.current) clearInterval(recordTimer.current);
+    if (playTimer.current) clearInterval(playTimer.current);
+    if (audioRecorder.isRecording) audioRecorder.stop().catch(() => {});
+    soundRef.current?.release();
+    soundRef.current = null;
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
   function showToast(msg: string) {
     setToast(msg);
@@ -393,81 +394,78 @@ export default function ChatApp() {
   }
 
   async function toggleRecording() {
-    if (isBlocked) return showToast('You have blocked this user.');
-    if (!activeChatId) return;
-    setShowAttachSheet(false);
-    if (!isRecording) {
-      const permission = await Audio.requestPermissionsAsync();
-      if (!permission.granted) {
-        showToast('Microphone permission is required to record voice messages.');
-        return;
-      }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      recordingRef.current = recording;
-      setIsRecording(true);
-      setRecordSeconds(0);
-      recordTimer.current = setInterval(() => {
-        setRecordSeconds((s) => s + 1);
-      }, 1000);
-    } else {
-      if (recordTimer.current) clearInterval(recordTimer.current);
-      setIsRecording(false);
-      const duration = Math.max(1, recordSeconds);
-      const recording = recordingRef.current;
-      recordingRef.current = null;
-      if (!recording) return;
-      await recording.stopAndUnloadAsync();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
-      const uri = recording.getURI();
-      appendMessage(activeChatId, {
-        id: nextId(),
-        chatId: activeChatId,
-        sender: 'me',
-        type: 'audio',
-        audioDuration: duration,
-        audioUri: uri ?? undefined,
-        timestamp: fmtTime(),
-        read: false,
-      });
-      setRecordSeconds(0);
-      autoReply(activeChatId);
+  if (isBlocked) return showToast('You have blocked this user.');
+  if (!activeChatId) return;
+  setShowAttachSheet(false);
+  if (!isRecording) {
+    const permission = await AudioModule.requestRecordingPermissionsAsync();
+    if (!permission.granted) {
+      showToast('Microphone permission is required to record voice messages.');
+      return;
     }
+    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+    await audioRecorder.prepareToRecordAsync();
+    audioRecorder.record();
+    setIsRecording(true);
+    setRecordSeconds(0);
+    recordTimer.current = setInterval(() => {
+      setRecordSeconds((s) => s + 1);
+    }, 1000);
+  } else {
+    if (recordTimer.current) clearInterval(recordTimer.current);
+    setIsRecording(false);
+    const duration = Math.max(1, recordSeconds);
+    await audioRecorder.stop();
+    await setAudioModeAsync({ allowsRecording: false });
+    const uri = audioRecorder.uri;
+    appendMessage(activeChatId, {
+      id: nextId(),
+      chatId: activeChatId,
+      sender: 'me',
+      type: 'audio',
+      audioDuration: duration,
+      audioUri: uri ?? undefined,
+      timestamp: fmtTime(),
+      read: false,
+    });
+    setRecordSeconds(0);
+    autoReply(activeChatId);
   }
+}
 
   async function togglePlay(messageId: string, uri: string | undefined, duration: number) {
-    // Stop whatever's currently playing, regardless of which message it belongs to.
-    if (playTimer.current) clearInterval(playTimer.current);
-    if (soundRef.current) {
-      await soundRef.current.unloadAsync().catch(() => {});
-      soundRef.current = null;
-    }
-    if (playingId === messageId) {
+  // Stop whatever's currently playing, regardless of which message it belongs to.
+  if (playTimer.current) clearInterval(playTimer.current);
+  if (soundRef.current) {
+    soundRef.current.release();
+    soundRef.current = null;
+  }
+  if (playingId === messageId) {
+    setPlayingId(null);
+    setPlayProgress(0);
+    return;
+  }
+  if (!uri) {
+    showToast('This voice message is unavailable.');
+    return;
+  }
+  setPlayingId(messageId);
+  setPlayProgress(0);
+  const player = createAudioPlayer({ uri });
+  soundRef.current = player;
+  player.addListener('playbackStatusUpdate', (status) => {
+    if (!status.isLoaded) return;
+    const total = status.duration || duration; // seconds now, not milliseconds
+    setPlayProgress(total ? status.currentTime / total : 0);
+    if (status.didJustFinish) {
       setPlayingId(null);
       setPlayProgress(0);
-      return;
+      player.release();
+      if (soundRef.current === player) soundRef.current = null;
     }
-    if (!uri) {
-      showToast('This voice message is unavailable.');
-      return;
-    }
-    setPlayingId(messageId);
-    setPlayProgress(0);
-    const { sound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true });
-    soundRef.current = sound;
-    sound.setOnPlaybackStatusUpdate((status) => {
-      if (!status.isLoaded) return;
-      const total = status.durationMillis || duration * 1000;
-      setPlayProgress(total ? status.positionMillis / total : 0);
-      if (status.didJustFinish) {
-        setPlayingId(null);
-        setPlayProgress(0);
-        sound.unloadAsync().catch(() => {});
-        if (soundRef.current === sound) soundRef.current = null;
-      }
-    });
-  }
-
+  });
+  player.play();
+}
   // -------------------------------------------------------------------
   // Header actions
   // -------------------------------------------------------------------
