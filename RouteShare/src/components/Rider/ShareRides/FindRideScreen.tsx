@@ -103,6 +103,7 @@ type Occupant = {
   id: string;
   name: string;
   role: 'Driver' | 'Passenger';
+  seatsRequested?: number;
 };
 const colors = {
   bgApp: "#F4F5F7",
@@ -556,16 +557,74 @@ useEffect(() => {
     setView('search');
   };
 
-  const handleSendRequest = () => {
+  const handleSendRequest = async () => {
     if (!selectedRide) return;
-    setRequestStatus('sending');
-    setTimeout(() => {
-      setRequestStatus('sent');
-      Alert.alert(
-        'Request sent',
-        `Your request to board at ${pickup.label} and drop off at ${destination?.label} was sent to ${selectedRide.driverName} and all passengers for approval.`
+  
+    if (!riderId) {
+      Alert.alert('Error', 'User ID not found.');
+      return;
+    }
+  
+    try {
+      setRequestStatus('sending');
+  
+      const API_URL = process.env.EXPO_PUBLIC_API_URL;
+  
+      const response = await fetch(
+        `${API_URL}/api/rides/${selectedRide.id}/join-request`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            riderId: Number(riderId),
+            seatsRequested: 1,
+          }),
+        }
       );
-    }, 700);
+  
+      const data = await response.json();
+  
+      console.log('JOIN REQUEST RESPONSE:', data);
+  
+      if (!response.ok) {
+        throw new Error(
+          data.error || 'Could not send join request.'
+        );
+      }
+  
+      setRequestStatus('sent');
+  
+      if (data.status === 'pending_passengers') {
+        Alert.alert(
+          'Request sent',
+          'Your request has been sent to the existing passengers for approval.'
+        );
+      } else if (data.status === 'waiting_driver') {
+        Alert.alert(
+          'Request sent',
+          'Your request has been sent directly to the driver for approval.'
+        );
+      } else {
+        Alert.alert(
+          'Request sent',
+          'Your join request was sent successfully.'
+        );
+      }
+  
+    } catch (error) {
+      console.error('JOIN REQUEST ERROR:', error);
+  
+      setRequestStatus('idle');
+  
+      Alert.alert(
+        'Could not send request',
+        error instanceof Error
+          ? error.message
+          : 'Something went wrong.'
+      );
+    }
   };
 
   const fetchSharedRides = async () => {
@@ -622,11 +681,12 @@ console.log('Destination:', {
   longitude: destination.longitude,
 });
 
-console.log('Request URL:',URL);
+const requestURL =
+  `${API_URL}/api/rides/shared?${params.toString()}`;
 
-      const response = await fetch(
-        `${API_URL}/api/rides/shared?${params.toString()}`
-      );
+console.log('Request URL:', requestURL);
+
+const response = await fetch(requestURL);
       console.log('Response status:', response.status);
   
       if (!response.ok) {

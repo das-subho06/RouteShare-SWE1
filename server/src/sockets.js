@@ -181,50 +181,206 @@ function initSockets(io) {
     });
 
 // Driver accepts — notify the rider directly
-socket.on('accept_ride', async ({ requestId, riderId, driverUserId, driver: clientDriver }, callback) => {
-  const numDriverId = Number(driverUserId);
-  const numRequestId = Number(requestId);
-  if (!numDriverId || Number.isNaN(numDriverId)) {
-    console.warn('⚠️ accept_ride called with invalid driverUserId:', driverUserId);
-    return callback?.({ ok: false, error: 'Missing driver id — please refresh and try again.' });
-  }
+socket.on(
+  'accept_ride',
+  async ({ requestId, riderId, driverUserId, driver: clientDriver }, callback) => {
+    const numDriverId = Number(driverUserId);
+    const numRequestId = Number(requestId);
 
-  try {
-    const updated = await pool.query(
-      `UPDATE rides
-         SET driver_id = $1, status = 'accepted', accepted_at = now()
-       WHERE id = $2 AND status = 'requested'
-       RETURNING ride_code`,
-      [numDriverId, numRequestId]
-    );
+    if (!numDriverId || Number.isNaN(numDriverId)) {
+      console.warn(
+        '⚠️ accept_ride called with invalid driverUserId:',
+        driverUserId
+      );
 
-    if (updated.rowCount === 0) {
-      console.log(`⚠️ ride ${requestId} already taken — ignoring accept from driver ${numDriverId}`);
-      socket.emit('ride_unavailable', { requestId });
-      return callback?.({ ok: false, error: 'This ride was already taken.' });
+      return callback?.({
+        ok: false,
+        error: 'Missing driver id — please refresh and try again.',
+      });
     }
 
-    const rideCode = updated.rows[0].ride_code;
+    const client = await pool.connect();
 
-    const driverInfo = await pool.query(
-      `SELECT dp.*, u.name FROM driver_profiles dp JOIN users u ON u.id = dp.user_id WHERE dp.user_id = $1`,
-      [numDriverId]
-    );
-    const driver = driverInfo.rows[0] || clientDriver;
+    try {
+      await client.query('BEGIN');
 
-    io.to(`rider_${riderId}`).emit('ride_accepted', { requestId, driver, rideCode });
+      // ---------------------------------------------------------
+      // 1. Accept the original ride
+      // ---------------------------------------------------------
+      //
+      // We also return the actual rider_id, seats_requested and
+      // ride_options from the database instead of trusting the
+      // values coming from the frontend.
+      //
+      const updated = await client.query(
+        `UPDATE rides
+         SET driver_id = $1,
+             status = 'accepted',
+             accepted_at = now()
+         WHERE id = $2
+           AND status = 'requested'
+         RETURNING
+             id,
+             rider_id,
+             driver_id,
+             seats_requested,
+             ride_code,
+             ride_options`,
+        [numDriverId, numRequestId]
+      );
 
-    onlineDrivers.forEach((socketId, uid) => {
-      if (String(uid) !== String(numDriverId)) {
-        io.to(socketId).emit('request_taken', { id: requestId });
+      if (updated.rowCount === 0) {
+        await client.query('ROLLBACK');
+
+        console.log(
+          `⚠️ ride ${requestId} already taken — ignoring accept from driver ${numDriverId}`
+        );
+
+        socket.emit('ride_unavailable', {
+          requestId,
+        });
+
+        return callback?.({
+          ok: false,
+          error: 'This ride was already taken.',
+        });
       }
-    });
-    callback?.({ ok: true, rideCode });
-  } catch (err) {
-    console.error('accept_ride error:', err);
-    callback?.({ ok: false, error: 'Server error.' });
+
+      const ride = updated.rows[0];
+
+      // ---------------------------------------------------------
+      // 2. Check whether this is a shared ride
+      // ---------------------------------------------------------
+
+      const isSharedRide =
+        Array.isArray(ride.ride_options) &&
+        ride.ride_options.includes('shared_ride');
+
+      if (isSharedRide) {
+        // -------------------------------------------------------
+        // 3. Add the DRIVER to ride_participants
+        // -------------------------------------------------------
+
+        await client.query(
+          `INSERT INTO ride_participants
+           (
+             ride_id,
+             user_id,
+             role,
+             seats_requested,
+             status
+           )
+           VALUES ($1, $2, 'driver', 1, 'active')
+           ON CONFLICT (ride_id, user_id)
+           DO UPDATE SET
+             role = 'driver',
+             seats_requested = 1,
+             status = 'active'`,
+          [
+            ride.id,
+            numDriverId,
+          ]
+        );
+
+        // -------------------------------------------------------
+        // 4. Add the ORIGINAL RIDER to ride_participants
+        // -------------------------------------------------------
+
+        await client.query(
+          `INSERT INTO ride_participants
+           (
+             ride_id,
+             user_id,
+             role,
+             seats_requested,
+             status
+           )
+           VALUES ($1, $2, 'rider', $3, 'active')
+           ON CONFLICT (ride_id, user_id)
+           DO UPDATE SET
+             role = 'rider',
+             seats_requested = EXCLUDED.seats_requested,
+             status = 'active'`,
+          [
+            ride.id,
+            ride.rider_id,
+            ride.seats_requested || 1,
+          ]
+        );
+
+        console.log(
+          `👥 Shared ride participants created for ride ${ride.id}:`,
+          `driver=${numDriverId},`,
+          `rider=${ride.rider_id},`,
+          `seats=${ride.seats_requested || 1}`
+        );
+      }
+
+      // ---------------------------------------------------------
+      // 5. Everything succeeded
+      // ---------------------------------------------------------
+
+      await client.query('COMMIT');
+
+      // ---------------------------------------------------------
+      // 6. Get driver information
+      // ---------------------------------------------------------
+
+      const driverInfo = await pool.query(
+        `SELECT
+           dp.*,
+           u.name
+         FROM driver_profiles dp
+         JOIN users u
+           ON u.id = dp.user_id
+         WHERE dp.user_id = $1`,
+        [numDriverId]
+      );
+
+      const driver = driverInfo.rows[0] || clientDriver;
+
+      // ---------------------------------------------------------
+      // 7. Tell the rider that the ride was accepted
+      // ---------------------------------------------------------
+
+      io.to(`rider_${ride.rider_id}`).emit('ride_accepted', {
+        requestId,
+        driver,
+        rideCode: ride.ride_code,
+      });
+
+      // ---------------------------------------------------------
+      // 8. Tell other online drivers that this request is taken
+      // ---------------------------------------------------------
+
+      onlineDrivers.forEach((socketId, uid) => {
+        if (String(uid) !== String(numDriverId)) {
+          io.to(socketId).emit('request_taken', {
+            id: requestId,
+          });
+        }
+      });
+
+      callback?.({
+        ok: true,
+        rideCode: ride.ride_code,
+      });
+
+    } catch (err) {
+      await client.query('ROLLBACK');
+
+      console.error('accept_ride error:', err);
+
+      callback?.({
+        ok: false,
+        error: 'Server error.',
+      });
+
+    } finally {
+      client.release();
+    }
   }
-});
+);
 
     // Driver taps "Reached Pickup Location"
     socket.on('ride_reached_pickup', async ({ requestId, driverUserId }, callback) => {

@@ -497,8 +497,9 @@ router.get('/shared', async (req, res) => {
           du.name AS driver_name,
     
           (
-              dp.seats -
-              COALESCE(
+              dp.seats 
+              -1
+              -COALESCE(
                   (
                       SELECT SUM(rp.seats_requested)
                       FROM ride_participants rp
@@ -554,8 +555,9 @@ router.get('/shared', async (req, res) => {
           )
     
           AND (
-              dp.seats -
-              COALESCE(
+              dp.seats 
+              -1
+              -COALESCE(
                   (
                       SELECT SUM(rp.seats_requested)
                       FROM ride_participants rp
@@ -1147,8 +1149,9 @@ router.post('/join-requests/:requestId/passenger-response', async (req, res) => 
     rjr.id,
     rjr.ride_id,
     rjr.rider_id,
-    rjr.seats_requested,
+    
     rjr.status,
+    rjr.seats_requested,
 
     r.driver_id,
     r.status AS ride_status,
@@ -1586,6 +1589,7 @@ router.post(
             rjr.ride_id,
             rjr.rider_id,
             rjr.status,
+            rjr.seats_requested,
 
             r.driver_id,
             r.status AS ride_status,
@@ -1749,5 +1753,123 @@ router.post(
     }
   }
 );
+router.post('/:rideId/accept', async (req, res) => {
+  const { rideId } = req.params;
+  const { driverId } = req.body;
 
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // Get the ride
+    const rideResult = await client.query(
+      `SELECT *
+       FROM rides
+       WHERE id = $1
+       FOR UPDATE`,
+      [Number(rideId)]
+    );
+
+    if (rideResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        error: 'Ride not found.'
+      });
+    }
+
+    const ride = rideResult.rows[0];
+
+    // Make sure this driver is actually accepting the ride
+    if (Number(ride.driver_id) !== Number(driverId)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        error: 'You are not the assigned driver for this ride.'
+      });
+    }
+
+    // Only requested rides can be accepted
+    if (ride.status !== 'requested') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: `Ride cannot be accepted because its status is '${ride.status}'.`
+      });
+    }
+
+    // 1. Accept the ride
+    await client.query(
+      `UPDATE rides
+       SET status = 'accepted'
+       WHERE id = $1`,
+      [Number(rideId)]
+    );
+
+    // 2. Add original driver
+    await client.query(
+      `INSERT INTO ride_participants
+       (
+         ride_id,
+         user_id,
+         role,
+         seats_requested,
+         status
+       )
+       VALUES ($1, $2, 'driver', 1, 'active')
+       ON CONFLICT (ride_id, user_id)
+       DO UPDATE SET
+         role = 'driver',
+         seats_requested = 1,
+         status = 'active'`,
+      [
+        Number(rideId),
+        Number(driverId)
+      ]
+    );
+
+    // 3. Add original rider
+    await client.query(
+      `INSERT INTO ride_participants
+       (
+         ride_id,
+         user_id,
+         role,
+         seats_requested,
+         status
+       )
+       VALUES ($1, $2, 'rider', $3, 'active')
+       ON CONFLICT (ride_id, user_id)
+       DO UPDATE SET
+         role = 'rider',
+         seats_requested = EXCLUDED.seats_requested,
+         status = 'active'`,
+      [
+        Number(rideId),
+        Number(ride.rider_id),
+        Number(ride.seats_requested || 1)
+      ]
+    );
+
+    await client.query('COMMIT');
+
+    return res.json({
+      success: true,
+      message: 'Ride accepted and participants added.',
+      rideId: Number(rideId),
+      driverId: Number(driverId),
+      riderId: Number(ride.rider_id)
+    });
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+
+    console.error('Accept ride error:', err);
+
+    return res.status(500).json({
+      error: 'Could not accept ride.'
+    });
+
+  } finally {
+    client.release();
+  }
+});
 module.exports = router;
