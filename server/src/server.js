@@ -3,6 +3,8 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('../swagger');
 const initSockets = require('./sockets');
 
 const authRouter = require('./routes/auth');     
@@ -17,7 +19,7 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json());
-
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api/auth', authRouter);
 app.use('/api/driver', driverRouter);
 app.use('/api/otp', otpRouter);

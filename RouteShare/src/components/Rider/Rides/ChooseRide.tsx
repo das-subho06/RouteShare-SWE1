@@ -198,7 +198,7 @@ if (confirming && selected) {
           
           const socket = getSocket();
           socket.emit('rider_online', { riderId });   // keep this — server needs it to route ride_accepted back
-
+          console.log("SOCKET CONNECTED:", socket.connected);
           socket.emit('request_ride', {
             riderId,
             riderName,
