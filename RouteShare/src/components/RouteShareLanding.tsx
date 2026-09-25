@@ -84,54 +84,54 @@ const MOBILE_PLAN_STYLE: Record<string, { bg: string; icon: string }> = {
 
 const PLANS: Plan[] = [
   {
-    id: 'city',
-    title: 'Within the City',
-    body: 'We run services within the city to any destination you want to go.',
+    id: 'rides',
+    title: 'Your ride, your choice',
+    body: 'Choose between a private ride or a shared journey that saves you money.',
     more:
-      'Rides typically arrive in under 8 minutes, with flat pricing across all city zones.',
+      'Book a no-share ride when you want the trip to yourself, or choose a shared ride and split the fare with passengers travelling along your route.',
     highlighted: true,
   },
   {
-    id: 'state',
-    title: 'Within the State',
-    body: 'We run services within the state to any destination you want to go.',
+    id: 'private',
+    title: 'On-Demand Private Rides',
+    body: 'Need a cab just for yourself?',
     more:
-      'Book ahead for intercity trips — drivers are matched a day in advance for comfort stops.',
+      'Book a private ride when no suitable shared ride is available, with vehicle selection, fare calculation and driver acceptance.',
   },
   {
-    id: 'country',
-    title: 'Within the Country',
-    body: 'We run services within the country to any destination you want to go.',
+    id: 'ai',
+    title: 'AI-Based Matching',
+    body: 'Find the most suitable ride automatically.',
     more:
-      'Long-haul trips include a rest-stop planner and a second driver option for overnight routes.',
+      'Our matching system compares your pickup, destination, route, timing, deviation, available seats and vehicle location to find compatible shared rides',
   },
   {
-    id: 'airport',
-    title: 'Airport Transfers',
-    body: 'We run services to and from the airport, timed around your flight.',
+    id: 'dynamic',
+    title: 'Dynamic Ride Sharing',
+    body: 'Find rides that match your route and share the journey with others heading the same way.',
     more:
-      'Flight tracking is built in, so pickup times shift automatically if your flight is delayed.',
+      'Passengers can join an ongoing route when their pickup and drop-off points fall along the driver’s journey, helping everyone save money.',
   },
   {
-    id: 'corporate',
-    title: 'Corporate Travel',
-    body: 'We run services for teams and businesses that need reliable daily rides.',
+    id: 'live',
+    title: 'Live Ride Tracking',
+    body: 'Track your cab in real time.',
     more:
-      'Monthly invoicing and a dedicated dispatcher are included for accounts with 10+ riders.',
+      'See the current location of the driver, route and estimated time of arrival to your pickup point.',
   },
   {
-    id: 'events',
-    title: 'Events & Occasions',
-    body: 'We run services for weddings, parties, and other special occasions.',
+    id: 'women',
+    title: 'Women’s Safety',
+    body: 'Safety-focused features help women have more control over who they share a ride with.',
     more:
-      'Decorated vehicles and multi-stop routes are available for wedding parties.',
+      'Passengers can approve or decline new riders before the request reaches the driver. Live trip-sharing and emergency support add extra safety during the ride.',
   },
   {
-    id: 'night',
-    title: 'Late Night Rides',
-    body: 'We run services through the night for anyone heading home late.',
+    id: 'chat',
+    title: 'Rider Chat',
+    body: 'Stay connected with the people sharing your ride.',
     more:
-      'Extra driver vetting and live trip-sharing with a contact are on by default after 11pm.',
+      'Passengers can chat with each other before and during the journey to coordinate pickup points, timings, and other ride details.',
   },
 ];
 
@@ -144,29 +144,29 @@ interface Benefit {
 
 const BENEFITS: Benefit[] = [
   {
-    id: 'pickup',
-    icon: '🏠',
-    title: 'Home Pickup',
-    body: 'We run a job every pickup to serve you better and to your convenience.',
-  },
-  {
-    id: 'bonus',
-    icon: '🎁',
-    title: 'Bonuses for Ride',
-    body: 'When you book a rideshare we give you a chance because that can put a smile on your face.',
-  },
-  {
-    id: 'booking',
-    icon: '👆',
-    title: 'Fast Booking',
-    body: 'Our best methods are very fast and easy. It won\u2019t stress you.',
-  },
-  {
-    id: 'gps',
-    icon: '📍',
-    title: 'GPS Searching',
-    body: 'We run GPS searching in case you aren\u2019t sure of your destination. So you don\u2019t have to worry.',
-  },
+  id: 'split-fare',
+  title: 'Split the Fare',
+  body: 'Share your ride with others going your way and divide the cost for a more affordable journey.',
+  icon: '💰'
+},
+{
+  id: 'passenger-approval',
+  title: 'Passenger Approval',
+  body: 'New riders request to join existing passengers first, keeping everyone comfortable and in control.',
+  icon: '🤝'
+},
+{
+  id: 'dynamic-matching',
+  title: 'Dynamic Route Matching',
+  body: 'Find passengers and rides whose pickup and drop-off points naturally fall along the same route.',
+  icon: '🗺️'
+},
+{
+  id: 'rider-chat',
+  title: 'Rider Chat',
+  body: 'Chat with fellow passengers to coordinate pickups, timings, and ride details with ease.',
+  icon: '💬'
+}
 ];
 
 // ---------------------------------------------------------------------------
@@ -288,7 +288,7 @@ function PlanCard({
   />
 </View>
   )}
-          {isWide && plan.id === 'state' && (
+          {isWide && plan.id === 'private' && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.5 }}>
             <CardBgSvg2
               width="100%"
@@ -297,7 +297,7 @@ function PlanCard({
             />
           </View>
         )}
-        {isWide && plan.id === 'country' && (
+        {isWide && plan.id === 'ai' && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.5 }}>
             <CardBgSvg3
               width="100%"
@@ -306,7 +306,7 @@ function PlanCard({
             />
           </View>
         )}
-         {isWide && plan.id === 'airport' && (
+         {isWide && plan.id === 'dynamic' && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.5 }}>
             <CardBgSvg4
               width="100%"
@@ -315,7 +315,7 @@ function PlanCard({
             />
           </View>
         )}
-         {isWide && plan.id === 'corporate' && (
+         {isWide && plan.id === 'live' && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.5 }}>
             <CardBgSvg5
               width="100%"
@@ -324,7 +324,7 @@ function PlanCard({
             />
           </View>
         )}
-         {isWide && plan.id === 'events' && (
+         {isWide && plan.id === 'women' && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.5 }}>
             <CardBgSvg6
               width="100%"
@@ -333,7 +333,7 @@ function PlanCard({
             />
           </View>
         )}
-         {isWide && plan.id === 'night' && (
+         {isWide && plan.id === 'chat' && (
           <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 315, overflow: 'hidden', opacity: 0.5 }}>
             <CardBgSvg7
               width="100%"
