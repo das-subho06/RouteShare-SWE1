@@ -16,6 +16,9 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import AsyncStorage from "../../lib/storage";
 import { getSocket } from "../../lib/socket";
 
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL;
+
 /* ------------------------------------------------------------------ */
 /*  Theme — Kept in sync with Rider.tsx                               */
 /* ------------------------------------------------------------------ */
@@ -293,6 +296,49 @@ const destCoords: Place = {
   // if the rider navigates back to Rider.tsx before the driver completes the
   // drop-off, Rider.tsx can show a "ride in progress" toast.
   const [myUserId, setMyUserId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!myUserId || !rideId) return;
+  
+    const fetchPendingJoinRequest = async () => {
+      try {
+        const response = await fetch(
+          `${API_URL}/api/rides/passenger/join-requests/${myUserId}/${rideId}`
+        );
+  
+        const result = await response.json();
+  
+        console.log("🔎 PENDING JOIN REQUEST:", {
+          passengerId: myUserId,
+          rideId,
+          result,
+        });
+  
+        if (!response.ok) {
+          console.error("Failed to fetch join request:", result);
+          return;
+        }
+  
+        if (!result) {
+          console.log("No pending join request for this ride.");
+          return;
+        }
+  
+        setIncomingJoinRequest({
+          joinRequestId: String(result.requestId),
+          requesterName: result.riderName ?? "A rider",
+          pickup: result.pickup ?? "—",
+          destination: result.destination ?? "—",
+          seatsRequested: result.seatsRequested ?? 1,
+        });
+  
+      } catch (error) {
+        console.error("Error fetching pending join request:", error);
+      }
+    };
+  
+    // fetchPendingJoinRequest();
+  
+  }, [myUserId, rideId]);
 
   useEffect(() => {
     (async () => {
@@ -446,17 +492,40 @@ return () => {
 
     // The server's rideId is the DB ride id — that's `requestId` on this page.
     // (`rideId` in the URL can be the ride *class* like "mini", so don't compare to it.)
+    // const isForThisRide = (payloadRideId: any) => {
+    //   if (payloadRideId == null) return true;
+    //   const p = String(payloadRideId);
+    //   if (requestId && p === String(requestId)) return true;
+    //   if (rideId && p === String(rideId)) return true;
+    //   return !requestId && !rideId; // no ids known -> don't filter
+    // };
     const isForThisRide = (payloadRideId: any) => {
-      if (payloadRideId == null) return true;
-      const p = String(payloadRideId);
-      if (requestId && p === String(requestId)) return true;
-      if (rideId && p === String(rideId)) return true;
-      return !requestId && !rideId; // no ids known -> don't filter
+      if (payloadRideId == null || !requestId) return false;
+      return String(payloadRideId) === String(requestId);
     };
 
+    // const handleJoinRequestPending = (payload: any) => {
+    //   console.log("📩 join_request_pending received:", payload, { requestId, rideId });
+    //   if (!isForThisRide(payload?.rideId)) return;
+    //   setIncomingJoinRequest({
+    //     joinRequestId: String(payload.joinRequestId),
+    //     requesterName: payload.requesterName ?? "A rider",
+    //     pickup: payload.pickup ?? "—",
+    //     destination: payload.destination ?? "—",
+    //     seatsRequested: payload.seatsRequested ?? 1,
+    //   });
+    // };
     const handleJoinRequestPending = (payload: any) => {
-      console.log("📩 join_request_pending received:", payload, { requestId, rideId });
-      if (!isForThisRide(payload?.rideId)) return;
+      console.log("🔥 JOIN REQUEST RECEIVED:", payload);
+    
+      if (!isForThisRide(payload?.rideId)) {
+        console.log("❌ Join request does NOT belong to this ride:", { payloadRideId: payload?.rideId, rideId });
+        console.log("❌ Join request belongs to another ride");
+        return;
+      }
+    
+      console.log("✅ Join request belongs to THIS ride");
+    
       setIncomingJoinRequest({
         joinRequestId: String(payload.joinRequestId),
         requesterName: payload.requesterName ?? "A rider",
@@ -480,29 +549,66 @@ return () => {
     };
   }, [rideId, requestId, myUserId]);
 
-  const respondToJoinRequest = (decision: "allow" | "deny") => {
+  const respondToJoinRequest = (
+    decision: "allow" | "deny"
+  ) => {
     if (!incomingJoinRequest || joinDecisionSending) return;
+  
+    if (!myUserId) {
+      console.error("User ID not found.");
+      showToast("Could not identify your account.");
+      return;
+    }
+  
     setJoinDecisionSending(true);
-    getSocket().emit(
+  
+    const socket = getSocket();
+  
+    socket.emit(
       "join_request_rider_decision",
       {
         joinRequestId: incomingJoinRequest.joinRequestId,
-        rideId,
-        riderId: myUserId,
+        riderId: Number(myUserId),
         decision,
       },
-      () => {
-        // No need to wait on an ack to close the sheet — the server also
-        // broadcasts `join_request_closed` to every rider in the car once
-        // it has a verdict, which covers the case where this emit's ack
-        // never arrives.
-        setJoinDecisionSending(false);
+      (response: any) => {
+  
+        console.log("🔥 RIDER DECISION RESPONSE:", response);
+  
+        if (!response?.ok) {
+          console.error(
+            "Failed to process rider decision:",
+            response?.error
+          );
+  
+          showToast(
+            response?.error || "Could not process the request."
+          );
+  
+          setJoinDecisionSending(false);
+          return;
+        }
+  
+        // Close modal
         setIncomingJoinRequest(null);
-        showToast(
-          decision === "allow"
-            ? "You allowed the new rider — waiting on the driver."
-            : "You denied the join request."
-        );
+  
+        if (decision === "allow") {
+  
+          if (response.status === "waiting_driver") {
+            showToast(
+              "You allowed the new rider — waiting for the driver."
+            );
+          } else {
+            showToast(
+              "You allowed the new rider — waiting for other passengers."
+            );
+          }
+  
+        } else {
+          showToast("You denied the join request.");
+        }
+  
+        setJoinDecisionSending(false);
       }
     );
   };

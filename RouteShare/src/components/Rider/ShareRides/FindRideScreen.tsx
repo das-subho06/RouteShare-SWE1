@@ -587,60 +587,61 @@ useEffect(() => {
     if (!selectedRide) return;
   
     if (!riderId) {
-      Alert.alert('Error', 'User ID not found.');
+      Alert.alert("Error", "User ID not found.");
       return;
     }
   
-    setRequestStatus('sending');
-
-    // Same ack-based contract as request_ride / accept_ride / cancel_ride —
-    // no REST round trip, so this behaves the same whether the socket just
-    // reconnected or has been open the whole time.
-    getSocket().emit(
-      'send_join_request',
+    const socket = getSocket();
+  
+    setRequestStatus("sending");
+  
+    console.log("📤 Sending join request through Socket.IO:", {
+      rideId: selectedRide.id,
+      riderId,
+      riderName,
+    });
+  
+    socket.emit(
+      "send_join_request",
       {
-        rideId: selectedRide.id,
+        rideId: Number(selectedRide.id),
         riderId: Number(riderId),
         riderName,
         pickup: selectedRide.pickup.label,
         destination: selectedRide.destination.label,
         seatsRequested: 1,
       },
-      (res: any) => {
-        console.log('JOIN REQUEST RESPONSE:', res);
-
-        if (!res?.ok) {
-          setRequestStatus('idle');
+      (result: any) => {
+        console.log("📥 JOIN REQUEST SOCKET ACK:", result);
+  
+        if (!result?.ok) {
+          setRequestStatus("idle");
+  
           Alert.alert(
-            'Could not send request',
-            res?.error ?? 'Something went wrong.'
+            "Could not send request",
+            result?.error ?? "Something went wrong."
           );
+  
           return;
         }
-
-        setRequestStatus('sent');
-
-        // The backend creates one join-request record for this whole
-        // rider→passengers→driver approval chain. We hang on to its id so
-        // we can match the `join_request_result` socket event to this
-        // request specifically (a rider could in theory have more than one
-        // pending join request across different ride cards).
-        setPendingJoinRequestId(res.joinRequestId ? String(res.joinRequestId) : null);
-
-        if (res.status === 'pending_passengers') {
+  
+        setRequestStatus("sent");
+  
+        setPendingJoinRequestId(
+          result.joinRequestId
+            ? String(result.joinRequestId)
+            : null
+        );
+  
+        if (result.status === "pending_passengers") {
           Alert.alert(
-            'Request sent',
-            'Your request has been sent to the existing passengers for approval. We\u2019ll let you know as soon as they respond.'
+            "Request sent",
+            "Your request has been sent to the existing passengers for approval."
           );
-        } else if (res.status === 'waiting_driver') {
+        } else if (result.status === "waiting_driver") {
           Alert.alert(
-            'Request sent',
-            'Your request has been sent directly to the driver for approval.'
-          );
-        } else {
-          Alert.alert(
-            'Request sent',
-            'Your join request was sent successfully.'
+            "Request sent",
+            "Your request has been sent directly to the driver for approval."
           );
         }
       }

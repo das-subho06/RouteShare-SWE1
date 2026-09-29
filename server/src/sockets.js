@@ -507,6 +507,7 @@ socket.on(
     // than going over REST, so it behaves the same way if the app is
     // offline/reconnecting.
     socket.on('send_join_request', async ({ rideId, riderId, riderName, pickup, destination, seatsRequested }, callback) => {
+      console.log("🚨🚨🚨 NEW SEND_JOIN_REQUEST CODE HIT 🚨🚨🚨");
       const numRideId = Number(rideId);
       if (!numRideId || Number.isNaN(numRideId) || !riderId) {
         return callback?.({ ok: false, error: 'Missing rideId or riderId.' });
@@ -519,24 +520,73 @@ socket.on(
         }
 
         const riderIds = await getActiveRiderIds(numRideId);
+        console.log("🔥🔥🔥 RIDER IDS FOR APPROVAL:", riderIds);
         if (riderIds.includes(String(riderId))) {
           return callback?.({ ok: false, error: 'You are already in this ride.' });
         }
 
         const seats = Number(seatsRequested) || 1;
-        const joinRequestId = randomUUID();
-        const status = riderIds.length > 0 ? 'pending_passengers' : 'waiting_driver';
+        const status =
+  riderIds.length > 0
+    ? 'pending_passengers'
+    : 'waiting_driver';
 
-        joinRequests.set(joinRequestId, {
-          rideId: numRideId,
-          requesterRiderId: String(riderId),
-          requesterName: riderName || 'A rider',
-          pickup: pickup || 'Requested pickup',
-          destination: destination || 'Requested drop-off',
-          seatsRequested: seats,
-          status,
-          awaitingRiderIds: [...riderIds],
-        });
+const result = await pool.query(
+  `INSERT INTO ride_join_requests
+    (
+      ride_id,
+      rider_id,
+      seats_requested,
+      status
+    )
+   VALUES ($1, $2, $3, $4)
+   RETURNING id`,
+  [
+    numRideId,
+    Number(riderId),
+    seats,
+    status
+  ]
+);
+
+const joinRequestId = result.rows[0].id;
+// Create approval records for all existing passengers
+if (status === "pending_passengers") {
+  console.log("🔥 APPROVAL DEBUG:", {
+    rideId: numRideId,
+    riderIds,
+    riderIdsLength: riderIds.length,
+    status,
+    joinRequestId
+  });
+  for (const passengerId of riderIds) {
+    await pool.query(
+      `
+      INSERT INTO ride_join_request_approvals
+        (request_id, passenger_id, status)
+      VALUES
+        ($1, $2, 'pending')
+      `,
+      [
+        joinRequestId,
+        Number(passengerId),
+      ]
+    );
+  }
+}
+joinRequests.set(String(joinRequestId), {
+  rideId: numRideId,
+  requesterRiderId: Number(riderId),
+  requesterName: riderName || "A rider",
+  pickup,
+  destination,
+  seatsRequested: seats,
+  status,
+  awaitingRiderIds:
+    status === "pending_passengers"
+      ? riderIds.map(String)
+      : [],
+});
 
         if (status === 'pending_passengers') {
           const payload = {
@@ -575,107 +625,252 @@ socket.on(
     // wins and the driver never sees it; once every current rider has said
     // "allow", it gets forwarded on to the driver for the final call.
     socket.on('join_request_rider_decision', async ({ joinRequestId, riderId, decision }, callback) => {
-      const record = joinRequests.get(joinRequestId);
-      if (!record || record.status !== 'pending_passengers') {
-        return callback?.({ ok: false, error: 'This request is no longer active.' });
-      }
-
-      try {
-        if (decision === 'deny') {
-          joinRequests.delete(joinRequestId);
-          io.to(`rider_${record.requesterRiderId}`).emit('join_request_result', {
-            joinRequestId,
-            status: 'denied',
-            deniedBy: 'rider',
+    
+        const record = joinRequests.get(String(joinRequestId));
+    
+        if (!record || record.status !== 'pending_passengers') {
+          return callback?.({
+            ok: false,
+            error: 'This request is no longer active.'
           });
-          const riderIds = await getActiveRiderIds(record.rideId);
-          riderIds.forEach((id) => io.to(`rider_${id}`).emit('join_request_closed', { joinRequestId }));
-          return callback?.({ ok: true });
         }
-
-        // decision === 'allow'
-        record.awaitingRiderIds = record.awaitingRiderIds.filter((id) => String(id) !== String(riderId));
-        if (record.awaitingRiderIds.length === 0) {
-          record.status = 'waiting_driver';
-          const ride = await getRideForJoinRequest(record.rideId);
-          if (!ride) {
-            joinRequests.delete(joinRequestId);
-            io.to(`rider_${record.requesterRiderId}`).emit('join_request_result', {
-              joinRequestId,
-              status: 'denied',
-              deniedBy: 'driver',
-            });
+    
+        try {
+    
+          // 1. STORE THE PASSENGER'S DECISION IN DB
+          await pool.query(
+            `
+            UPDATE ride_join_request_approvals
+            SET
+              status = $1,
+              responded_at = NOW()
+            WHERE request_id = $2
+              AND passenger_id = $3
+            `,
+            [
+              decision === 'allow' ? 'approved' : 'rejected',
+              Number(joinRequestId),
+              Number(riderId)
+            ]
+          );
+    
+          // 2. DENIED
+          if (decision === 'deny') {
+    
+            await pool.query(
+              `
+              UPDATE ride_join_requests
+              SET status = 'rejected'
+              WHERE id = $1
+              `,
+              [Number(joinRequestId)]
+            );
+    
+            joinRequests.delete(String(joinRequestId));
+    
+            io.to(`rider_${record.requesterRiderId}`).emit(
+              'join_request_result',
+              {
+                joinRequestId,
+                status: 'denied',
+                deniedBy: 'rider'
+              }
+            );
+    
             return callback?.({ ok: true });
           }
-          const driverSocketId = onlineDrivers.get(String(ride.driver_id));
-          if (driverSocketId) {
-            io.to(driverSocketId).emit('join_request_incoming', {
-              joinRequestId,
-              rideId: record.rideId,
-              requesterName: record.requesterName,
-              pickup: record.pickup,
-              destination: record.destination,
-              seatsRequested: record.seatsRequested,
-              price: ride.price,
+    
+          // 3. ALLOWED → UPDATE REALTIME MEMORY
+          record.awaitingRiderIds =
+            record.awaitingRiderIds.filter(
+              id => String(id) !== String(riderId)
+            );
+    
+          // 4. SOME OTHER PASSENGER STILL HAS TO APPROVE
+          if (record.awaitingRiderIds.length > 0) {
+            return callback?.({
+              ok: true,
+              status: 'waiting_passengers'
             });
           }
+    
+          // 5. EVERY PASSENGER APPROVED
+          record.status = 'waiting_driver';
+    
+          await pool.query(
+            `
+            UPDATE ride_join_requests
+            SET status = 'waiting_driver'
+            WHERE id = $1
+            `,
+            [Number(joinRequestId)]
+          );
+    
+          // 6. GET DRIVER
+          const ride = await getRideForJoinRequest(record.rideId);
+    
+          if (!ride) {
+            return callback?.({
+              ok: false,
+              error: 'Ride not found.'
+            });
+          }
+    
+          // 7. NOTIFY DRIVER THROUGH SOCKET.IO
+          const driverSocketId =
+            onlineDrivers.get(String(ride.driver_id));
+    
+          if (driverSocketId) {
+    
+            io.to(driverSocketId).emit(
+              'join_request_incoming',
+              {
+                joinRequestId,
+                rideId: record.rideId,
+                requesterName: record.requesterName,
+                pickup: record.pickup,
+                destination: record.destination,
+                seatsRequested: record.seatsRequested,
+                price: ride.price
+              }
+            );
+          }
+    
+          callback?.({
+            ok: true,
+            status: 'waiting_driver'
+          });
+    
+        } catch (err) {
+    
+          console.error(
+            'join_request_rider_decision error:',
+            err
+          );
+    
+          callback?.({
+            ok: false,
+            error: 'Server error.'
+          });
         }
-        callback?.({ ok: true });
-      } catch (err) {
-        console.error('join_request_rider_decision error:', err);
-        callback?.({ ok: false, error: 'Server error.' });
       }
-    });
+    );
 
     // The driver makes the final call, once every existing rider has
     // already said "allow".
-    socket.on('join_request_driver_decision', async ({ joinRequestId, decision }, callback) => {
-      const record = joinRequests.get(joinRequestId);
-      if (!record || record.status !== 'waiting_driver') {
-        return callback?.({ ok: false, error: 'This request is no longer active.' });
-      }
-
-      try {
-        if (decision === 'deny') {
-          joinRequests.delete(joinRequestId);
-          io.to(`rider_${record.requesterRiderId}`).emit('join_request_result', {
-            joinRequestId,
-            status: 'denied',
-            deniedBy: 'driver',
+    socket.on(
+      'join_request_driver_decision',
+      async ({ joinRequestId, decision }, callback) => {
+    
+        const record = joinRequests.get(String(joinRequestId));
+    
+        if (!record || record.status !== 'waiting_driver') {
+          return callback?.({
+            ok: false,
+            error: 'This request is no longer active.'
           });
-          return callback?.({ ok: true });
         }
-
-        // decision === 'allow' — seat them.
-        const ride = await getRideForJoinRequest(record.rideId);
-        if (!ride) {
-          joinRequests.delete(joinRequestId);
-          return callback?.({ ok: false, error: 'Ride no longer available.' });
+    
+        try {
+    
+          // DRIVER DENIES
+          if (decision === 'deny') {
+    
+            await pool.query(
+              `
+              UPDATE ride_join_requests
+              SET status = 'rejected'
+              WHERE id = $1
+              `,
+              [Number(joinRequestId)]
+            );
+    
+            joinRequests.delete(String(joinRequestId));
+    
+            io.to(`rider_${record.requesterRiderId}`).emit(
+              'join_request_result',
+              {
+                joinRequestId,
+                status: 'denied',
+                deniedBy: 'driver'
+              }
+            );
+    
+            return callback?.({
+              ok: true,
+              status: 'rejected'
+            });
+          }
+    
+          // DRIVER ALLOWS
+    
+          // 1. Update request status in DB
+          await pool.query(
+            `
+            UPDATE ride_join_requests
+            SET status = 'approved'
+            WHERE id = $1
+            `,
+            [Number(joinRequestId)]
+          );
+    
+          // 2. Add the new rider to the ride
+          await pool.query(
+            `
+            INSERT INTO ride_participants
+              (ride_id, user_id, role, seats_requested, status)
+            VALUES
+              ($1, $2, 'rider', $3, 'active')
+            ON CONFLICT (ride_id, user_id)
+            DO UPDATE SET
+              status = 'active',
+              seats_requested = EXCLUDED.seats_requested
+            `,
+            [
+              record.rideId,
+              record.requesterRiderId,
+              record.seatsRequested
+            ]
+          );
+    
+          // 3. Remove from realtime memory
+          joinRequests.delete(String(joinRequestId));
+    
+          // 4. Get ride details
+          const ride = await getRideForJoinRequest(record.rideId);
+    
+          // 5. Tell requesting rider
+          io.to(`rider_${record.requesterRiderId}`).emit(
+            'join_request_result',
+            {
+              joinRequestId,
+              status: 'approved',
+              requestId: record.rideId,
+              rideCode: ride?.ride_code,
+              vehicleModel: ride?.vehicle_model,
+              vehicleNumber: ride?.vehicle_number
+            }
+          );
+    
+          callback?.({
+            ok: true,
+            status: 'approved'
+          });
+    
+        } catch (err) {
+    
+          console.error(
+            'join_request_driver_decision error:',
+            err
+          );
+    
+          callback?.({
+            ok: false,
+            error: 'Server error.'
+          });
         }
-
-        await pool.query(
-          `INSERT INTO ride_participants (ride_id, user_id, role, seats_requested, status)
-           VALUES ($1, $2, 'rider', $3, 'active')
-           ON CONFLICT (ride_id, user_id)
-           DO UPDATE SET seats_requested = EXCLUDED.seats_requested, status = 'active'`,
-          [record.rideId, record.requesterRiderId, record.seatsRequested]
-        );
-
-        joinRequests.delete(joinRequestId);
-        io.to(`rider_${record.requesterRiderId}`).emit('join_request_result', {
-          joinRequestId,
-          status: 'approved',
-          requestId: record.rideId,
-          rideCode: ride.ride_code,
-          vehicleModel: ride.vehicle_model,
-          vehicleNumber: ride.vehicle_number,
-        });
-        callback?.({ ok: true });
-      } catch (err) {
-        console.error('join_request_driver_decision error:', err);
-        callback?.({ ok: false, error: 'Server error.' });
       }
-    });
+    );
 
     socket.on('disconnect', () => {
       if (socket.data.role === 'driver' && socket.data.userId) {

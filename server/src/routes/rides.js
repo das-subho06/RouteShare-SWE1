@@ -1494,6 +1494,374 @@ router.get('/driver/join-requests/:driverId', async (req, res) => {
 
 /**
  * @swagger
+ * /api/rides/passenger/join-requests/{passengerId}:
+ *   get:
+ *     summary: Get shared ride join requests waiting for passenger approval
+ *     tags: [Rides]
+ *     parameters:
+ *       - in: path
+ *         name: passengerId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         example: 6
+ *     responses:
+ *       200:
+ *         description: List of join requests waiting for passenger approval
+ *       400:
+ *         description: Invalid passenger ID
+ *       500:
+ *         description: Could not fetch passenger join requests
+ */
+router.get('/passenger/join-requests/:passengerId', async (req, res) => {
+  const { passengerId } = req.params;
+  const { rideId } = req.query;
+
+  try {
+    const passengerIdNumber = Number(passengerId);
+    const rideIdNumber = Number(rideId);
+
+    if (!Number.isInteger(passengerIdNumber)) {
+      return res.status(400).json({
+        error: 'Invalid passengerId.'
+      });
+    }
+
+    if (!Number.isInteger(rideIdNumber)) {
+      return res.status(400).json({
+        error: 'Invalid rideId.'
+      });
+    }
+
+    const result = await pool.query(
+      `
+      SELECT
+          rjr.id AS request_id,
+          rjr.ride_id,
+          rjr.rider_id,
+          rjr.status,
+          rjr.seats_requested,
+          rjr.requested_at,
+
+          requester.name AS rider_name,
+
+          r.pickup_label,
+          r.destination_label,
+          r.pickup_lat,
+          r.pickup_lng,
+          r.destination_lat,
+          r.destination_lng,
+          r.distance_km,
+          r.duration_minutes,
+          r.ride_class,
+          r.ride_code,
+
+          driver.id AS driver_id,
+          driver.name AS driver_name,
+
+          rjra.id AS approval_id,
+          rjra.status AS approval_status
+
+      FROM ride_join_request_approvals rjra
+
+      JOIN ride_join_requests rjr
+          ON rjr.id = rjra.request_id
+
+      JOIN rides r
+          ON r.id = rjr.ride_id
+
+      JOIN users requester
+          ON requester.id = rjr.rider_id
+
+      JOIN users driver
+          ON driver.id = r.driver_id
+
+      WHERE rjra.passenger_id = $1
+        AND rjra.status = 'pending'
+        AND rjr.status = 'pending_passengers'
+        AND rjr.ride_id = $2
+
+      ORDER BY rjr.requested_at ASC
+      `,
+      [passengerIdNumber, rideIdNumber]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json(null);
+    }
+
+    const row = result.rows[0];
+
+    return res.json({
+      requestId: row.request_id,
+      rideId: row.ride_id,
+      riderId: row.rider_id,
+      riderName: row.rider_name,
+      passengerId: passengerIdNumber,
+      driverId: row.driver_id,
+      driverName: row.driver_name,
+      status: row.status,
+      approvalStatus: row.approval_status,
+      pickup: row.pickup_label,
+      destination: row.destination_label,
+      pickupCoords: {
+        latitude: Number(row.pickup_lat),
+        longitude: Number(row.pickup_lng)
+      },
+      destinationCoords: {
+        latitude: Number(row.destination_lat),
+        longitude: Number(row.destination_lng)
+      },
+      distanceKm: Number(row.distance_km),
+      durationMinutes: Number(row.duration_minutes),
+      rideClass: row.ride_class,
+      seatsRequested: row.seats_requested,
+      rideCode: row.ride_code,
+      requestedAt: row.requested_at
+    });
+
+  } catch (err) {
+    console.error('Passenger join requests error:', err);
+
+    return res.status(500).json({
+      error: 'Could not fetch passenger join requests.'
+    });
+  }
+});
+
+
+/**
+ * @swagger
+ * /api/rides/passenger/join-requests/{passengerId}/{rideId}:
+ *   get:
+ *     summary: Get pending join requests for a passenger
+ *     description: >
+ *       Returns the oldest pending join request for a passenger who is
+ *       already part of the specified ride. This is used to recover a
+ *       join-request notification if the passenger missed the Socket.IO event.
+ *     tags:
+ *       - Rides
+ *     parameters:
+ *       - in: path
+ *         name: passengerId
+ *         required: true
+ *         description: ID of the passenger who needs to approve the request
+ *         schema:
+ *           type: integer
+ *           example: 3
+ *
+ *       - in: path
+ *         name: rideId
+ *         required: true
+ *         description: ID of the ride
+ *         schema:
+ *           type: integer
+ *           example: 12
+ *
+ *     responses:
+ *       200:
+ *         description: Pending join request found, or null if there is none
+ *         content:
+ *           application/json:
+ *             schema:
+ *               oneOf:
+ *                 - type: object
+ *                   properties:
+ *                     requestId:
+ *                       type: integer
+ *                       example: 25
+ *                     rideId:
+ *                       type: integer
+ *                       example: 12
+ *                     riderId:
+ *                       type: integer
+ *                       example: 7
+ *                     riderName:
+ *                       type: string
+ *                       example: John Doe
+ *                     passengerId:
+ *                       type: integer
+ *                       example: 3
+ *                     driverId:
+ *                       type: integer
+ *                       example: 1
+ *                     driverName:
+ *                       type: string
+ *                       example: Alex
+ *                     status:
+ *                       type: string
+ *                       example: pending_passengers
+ *                     approvalStatus:
+ *                       type: string
+ *                       example: pending
+ *                     pickup:
+ *                       type: string
+ *                       example: Salt Lake Sector V
+ *                     destination:
+ *                       type: string
+ *                       example: Park Street
+ *                     distanceKm:
+ *                       type: number
+ *                       format: float
+ *                       example: 12.6
+ *                     durationMinutes:
+ *                       type: number
+ *                       example: 24
+ *                     rideClass:
+ *                       type: string
+ *                       example: mini
+ *                     seatsRequested:
+ *                       type: integer
+ *                       example: 1
+ *                     rideCode:
+ *                       type: string
+ *                       example: ROUTE78
+ *                     requestedAt:
+ *                       type: string
+ *                       format: date-time
+ *                       example: "2026-09-28T15:30:00Z"
+ *
+ *                 - type: "null"
+ *                   example: null
+ *
+ *       400:
+ *         description: Invalid passengerId or rideId
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: Invalid passengerId.
+ *
+ *       500:
+ *         description: Could not fetch passenger join request
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: Could not fetch passenger join request.
+ */
+router.get('/passenger/join-requests/:passengerId/:rideId', async (req, res) => {
+  const { passengerId, rideId } = req.params;
+
+  try {
+    const passengerIdNumber = Number(passengerId);
+    const rideIdNumber = Number(rideId);
+
+    if (!Number.isInteger(passengerIdNumber)) {
+      return res.status(400).json({
+        error: 'Invalid passengerId.'
+      });
+    }
+
+    if (!Number.isInteger(rideIdNumber)) {
+      return res.status(400).json({
+        error: 'Invalid rideId.'
+      });
+    }
+
+    const result = await pool.query(
+      `
+      SELECT
+          rjr.id AS request_id,
+          rjr.ride_id,
+          rjr.rider_id,
+          rjr.status,
+          rjr.seats_requested,
+          rjr.requested_at,
+
+          requester.name AS rider_name,
+
+          r.pickup_label,
+          r.destination_label,
+
+          r.driver_id,
+          driver.name AS driver_name,
+
+          r.distance_km,
+          r.duration_minutes,
+          r.ride_class,
+          r.ride_code,
+
+          rjra.status AS approval_status
+
+      FROM ride_join_request_approvals rjra
+
+      JOIN ride_join_requests rjr
+          ON rjr.id = rjra.request_id
+
+      JOIN rides r
+          ON r.id = rjr.ride_id
+
+      JOIN users requester
+          ON requester.id = rjr.rider_id
+
+      JOIN users driver
+          ON driver.id = r.driver_id
+
+      WHERE rjra.passenger_id = $1
+        AND rjra.status = 'pending'
+        AND rjr.status = 'pending_passengers'
+        AND rjr.ride_id = $2
+
+      ORDER BY rjr.requested_at ASC
+      `,
+      [passengerIdNumber, rideIdNumber]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json(null);
+    }
+
+    const row = result.rows[0];
+
+    return res.json({
+      requestId: row.request_id,
+      rideId: row.ride_id,
+
+      riderId: row.rider_id,
+      riderName: row.rider_name,
+
+      passengerId: passengerIdNumber,
+
+      driverId: row.driver_id,
+      driverName: row.driver_name,
+
+      status: row.status,
+      approvalStatus: row.approval_status,
+
+      pickup: row.pickup_label,
+      destination: row.destination_label,
+
+      distanceKm: Number(row.distance_km),
+      durationMinutes: Number(row.duration_minutes),
+
+      rideClass: row.ride_class,
+      seatsRequested: row.seats_requested,
+      rideCode: row.ride_code,
+
+      requestedAt: row.requested_at
+    });
+
+  } catch (err) {
+    console.error(
+      'Passenger join request error:',
+      err
+    );
+
+    return res.status(500).json({
+      error: 'Could not fetch passenger join request.'
+    });
+  }
+});
+
+/**
+ * @swagger
  * /api/rides/join-requests/{requestId}/driver-response:
  *   post:
  *     summary: Approve or reject a shared ride join request
