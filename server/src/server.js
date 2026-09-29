@@ -11,6 +11,7 @@ const authRouter = require('./routes/auth');
 const driverRouter = require('./routes/driver');  
 const otpRouter = require('./routes/otp'); 
 const ridesRouter = require('./routes/rides');
+const chatRoutes = require('./routes/chat');
 const driverRatingRouter = require('./routes/driverRating');         
 const app = express();
 
@@ -24,6 +25,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/driver', driverRouter);
 app.use('/api/otp', otpRouter);
 app.use('/api/rides', ridesRouter);
+app.use('/api/chat', chatRoutes);
 app.use('/api/driver-rating', driverRatingRouter); 
 const server = http.createServer(app);
 const io = new Server(server, {
