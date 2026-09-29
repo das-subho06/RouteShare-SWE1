@@ -1004,6 +1004,78 @@ setInterval(async () => {
     console.error('stale-request sweep error:', err);
   }
 }, 2 * 60 * 1000);
+
+
+
+
+
+
+
+
+
+
+
+// ---------------------------------------------------------------------------
+// Global chat notification
+// ---------------------------------------------------------------------------
+
+socket.on('user_online', ({ userId }) => {
+  if (!userId) return;
+
+  socket.join(`user_${userId}`);
+  socket.data.userId = String(userId);
+
+  console.log(`👤 User ${userId} joined global notification room`);
+});
+
+socket.on('chat_message_notification', async ({
+  conversationId,
+  senderId,
+  messageId,
+  messageType,
+  message,
+}) => {
+  if (!conversationId || !senderId) return;
+
+  try {
+    // Find everyone in this conversation except the sender
+    const { rows } = await pool.query(
+      `
+      SELECT
+        cp.user_id,
+        u.name AS sender_name
+      FROM conversation_participants cp
+      JOIN users u
+        ON u.id = $2
+      WHERE cp.conversation_id = $1
+        AND cp.user_id <> $2
+        AND cp.active = true
+      `,
+      [conversationId, senderId]
+    );
+
+    const payload = {
+      conversationId: String(conversationId),
+      messageId: messageId ? String(messageId) : null,
+      senderId: String(senderId),
+      senderName: rows[0]?.sender_name || 'Rider',
+      messageType: messageType || 'text',
+      message: message || '',
+    };
+
+    for (const row of rows) {
+      io.to(`user_${row.user_id}`).emit(
+        'chat_message_notification',
+        payload
+      );
+    }
+
+    console.log('💬 Chat notification sent:', payload);
+
+  } catch (err) {
+    console.error('❌ chat_message_notification error:', err);
+  }
+});
   });
 }
 

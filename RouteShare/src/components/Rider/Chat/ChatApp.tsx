@@ -21,6 +21,8 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder, createAudioPlayer, AudioPlayer } from 'expo-audio';
 import {Sidebar} from '../Sidebar';
+import AsyncStorage from '../../lib/storage';
+import { getSocket } from '@/components/lib/socket';
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -31,17 +33,28 @@ interface Message {
   id: string;
   chatId: string;
   sender: 'me' | 'them';
+  senderId?: string;
+  senderName?: string;
   type: MessageType;
   text?: string;
   imageUri?: string;
   fileName?: string;
   fileSize?: string;
-  audioDuration?: number; // seconds
+  audioDuration?: number;
   audioUri?: string;
   lat?: number;
   lng?: number;
   timestamp: string;
   read: boolean;
+}
+
+interface ChatParticipant {
+  user_id: number;
+  name: string;
+  email: string;
+  joined_at: string;
+  left_at: string | null;
+  active: boolean;
 }
 
 interface Contact {
@@ -154,11 +167,17 @@ export default function ChatApp() {
   const { width } = useWindowDimensions();
   const isWide = width >= 900; // tablet / desktop-web: show list + chat + profile together
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [contacts, setContacts] = useState<Contact[]>(CONTACTS);
-  const [unread, setUnread] = useState<Record<string, number>>(UNREAD_SEED);
+  // DB-backed rider group chat. There is one conversation per ride.
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [unread, setUnread] = useState<Record<string, number>>({});
   const [muted, setMuted] = useState<Set<string>>(new Set());
   const [blocked, setBlocked] = useState<Set<string>>(new Set());
-  const [messagesByChat, setMessagesByChat] = useState<Record<string, Message[]>>(seedMessages());
+  const [messagesByChat, setMessagesByChat] = useState<Record<string, Message[]>>({});
+  const [chatParticipants, setChatParticipants] = useState<ChatParticipant[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [rideId, setRideId] = useState<string | null>(null);
+  const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [chatLoading, setChatLoading] = useState(true);
 
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -188,8 +207,194 @@ export default function ChatApp() {
   const activeContact = contacts.find((c) => c.id === activeChatId) || null;
   const activeMessages = activeChatId ? messagesByChat[activeChatId] ?? [] : [];
   const isBlocked = activeChatId ? blocked.has(activeChatId) : false;
-  const { name: nameParam } = useLocalSearchParams<{ name?: string | string[] }>();
-    const riderName = (Array.isArray(nameParam) ? nameParam[0] : nameParam)?.trim() || 'Rider';
+  const params = useLocalSearchParams<{
+    name?: string | string[];
+    username?: string | string[];
+    rideId?: string | string[];
+    requestId?: string | string[];
+    userId?: string | string[];
+  }>();
+  const riderName = (Array.isArray(params.name) ? params.name[0] : params.name)?.trim() || 'Rider';
+  const paramRideId = Array.isArray(params.rideId) ? params.rideId[0] : params.rideId;
+  const paramRequestId = Array.isArray(params.requestId) ? params.requestId[0] : params.requestId;
+  const paramUserId = Array.isArray(params.userId) ? params.userId[0] : params.userId;
+  const API_URL = process.env.EXPO_PUBLIC_API_URL;
+  // -------------------------------------------------------------------
+  // DB-backed chat
+  // -------------------------------------------------------------------
+
+  const mapBackendMessage = (row: any, currentUserId: string): Message => {
+    const messageType = (row.message_type || 'text') as MessageType;
+    let lat: number | undefined;
+    let lng: number | undefined;
+
+    if (messageType === 'location' && row.content) {
+      try {
+        const location = JSON.parse(row.content);
+        lat = Number(location.lat);
+        lng = Number(location.lng);
+      } catch {
+        // Older/invalid location content can simply render as text.
+      }
+    }
+
+    return {
+      id: String(row.id),
+      chatId: String(row.conversation_id),
+      sender: String(row.sender_id) === String(currentUserId) ? 'me' : 'them',
+      senderId: String(row.sender_id),
+      senderName: row.sender_name ?? 'Rider',
+      type: messageType,
+      text: row.content ?? undefined,
+      imageUri: messageType === 'image' ? row.file_url ?? undefined : undefined,
+      audioUri: messageType === 'audio' ? row.file_url ?? undefined : undefined,
+      fileName: messageType === 'file' ? row.content ?? 'File' : undefined,
+      fileSize: undefined,
+      lat,
+      lng,
+      timestamp: new Date(row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      read: !!row.read_at || String(row.sender_id) === String(currentUserId),
+    };
+  };
+
+  const fetchConversationMessages = async (convId: string, userId: string, silent = false) => {
+    if (!API_URL) {
+      if (!silent) showToast('API URL is not configured.');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/api/chat/${convId}/messages`);
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result?.error || 'Could not fetch messages.');
+      }
+
+      const rows = Array.isArray(result?.messages) ? result.messages : [];
+      const mapped = rows.map((row: any) => mapBackendMessage(row, userId));
+      setMessagesByChat((prev) => ({ ...prev, [convId]: mapped }));
+    } catch (error) {
+      console.error('Fetch chat messages error:', error);
+      if (!silent) showToast('Could not load chat messages.');
+    }
+  };
+
+  const loadRideChat = async (resolvedRideId: string, resolvedUserId: string) => {
+    if (!API_URL) {
+      setChatLoading(false);
+      showToast('API URL is not configured.');
+      return;
+    }
+
+    try {
+      setChatLoading(true);
+
+      const response = await fetch(`${API_URL}/api/chat/ride/${resolvedRideId}`);
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result?.error || 'Could not create or fetch ride chat.');
+      }
+
+      const convId = String(result.conversation.id);
+      const participants: ChatParticipant[] = result.participants ?? [];
+      const groupName = `Ride ${resolvedRideId} • Riders`;
+      const firstParticipant = participants[0];
+
+      // One group-chat entry, not one entry per rider. Driver is never shown here.
+      const groupContact: Contact = {
+        id: convId,
+        name: groupName,
+        role: `Rider group • ${participants.length} riders`,
+        avatar: firstParticipant
+          ? `https://i.pravatar.cc/150?u=rider-${firstParticipant.user_id}`
+          : 'https://i.pravatar.cc/150?u=routeshare-riders',
+        online: true,
+        lastSeen: `${participants.length} active rider${participants.length === 1 ? '' : 's'}`,
+      };
+
+      setRideId(String(resolvedRideId));
+      setConversationId(convId);
+      setChatParticipants(participants);
+      setContacts([groupContact]);
+      setActiveChatId(convId);
+
+      await fetchConversationMessages(convId, resolvedUserId);
+    } catch (error) {
+      console.error('Load ride chat error:', error);
+      showToast(error instanceof Error ? error.message : 'Could not load ride chat.');
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const initialiseChat = async () => {
+      try {
+        const storedUserId = await AsyncStorage.getItem('userId');
+        const storedRideSummary = await AsyncStorage.getItem('activeRideSummary');
+        let storedRideId: string | null = null;
+
+        if (storedRideSummary) {
+          try {
+            const summary = JSON.parse(storedRideSummary);
+            storedRideId = summary?.requestId ? String(summary.requestId) : null;
+          } catch {
+            storedRideId = null;
+          }
+        }
+
+        const resolvedUserId = paramUserId || storedUserId;
+        const resolvedRideId = paramRideId || paramRequestId || storedRideId;
+
+        if (cancelled) return;
+
+        setMyUserId(resolvedUserId ? String(resolvedUserId) : null);
+        setRideId(resolvedRideId ? String(resolvedRideId) : null);
+
+        if (!resolvedUserId) {
+          setChatLoading(false);
+          showToast('Could not identify your account.');
+          return;
+        }
+
+        if (!resolvedRideId) {
+          setChatLoading(false);
+          showToast('No ride selected for chat. Open chat from an active ride.');
+          return;
+        }
+
+        await loadRideChat(String(resolvedRideId), String(resolvedUserId));
+      } catch (error) {
+        console.error('Chat initialisation error:', error);
+        if (!cancelled) {
+          setChatLoading(false);
+          showToast('Could not initialise chat.');
+        }
+      }
+    };
+
+    initialiseChat();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [paramRideId, paramRequestId, paramUserId]);
+
+  // DB polling only. No Socket.IO is used for chat.
+  useEffect(() => {
+    if (!conversationId || !myUserId) return;
+
+    const interval = setInterval(() => {
+      fetchConversationMessages(conversationId, myUserId, true);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [conversationId, myUserId]);
+
   // Toast auto-hide
   useEffect(() => {
     if (!toast) return;
@@ -258,43 +463,53 @@ export default function ChatApp() {
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 60);
   }
 
-  function autoReply(chatId: string) {
-    const replies = [
-      'Got it, thanks!',
-      "Sounds good 👍",
-      'Okay, noted!',
-      "I'll check and get back to you.",
-      'Perfect, see you then!',
-    ];
-    const text = replies[Math.floor(Math.random() * replies.length)];
-    setTimeout(() => {
-      appendMessage(chatId, {
-        id: nextId(),
-        chatId,
-        sender: 'them',
-        type: 'text',
-        text,
-        timestamp: fmtTime(),
-        read: true,
-      });
-    }, 1200 + Math.random() * 900);
-  }
+  async function handleSend() {
+    if (!activeChatId || !conversationId || !myUserId || isBlocked) return;
 
-  function handleSend() {
-    if (!activeChatId || isBlocked) return;
     const trimmed = inputText.trim();
     if (!trimmed) return;
-    appendMessage(activeChatId, {
-      id: nextId(),
-      chatId: activeChatId,
-      sender: 'me',
-      type: 'text',
-      text: trimmed,
-      timestamp: fmtTime(),
-      read: false,
-    });
-    setInputText('');
-    autoReply(activeChatId);
+
+    if (!API_URL) {
+      showToast('API URL is not configured.');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/api/chat/${conversationId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          senderId: Number(myUserId),
+          messageType: 'text',
+          content: trimmed,
+          fileUrl: null,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result?.error || 'Could not send message.');
+      }
+      // 🔔 Notify the other participants
+      getSocket().emit('chat_message_notification', {
+        conversationId: String(conversationId),
+        senderId: String(myUserId),
+        messageId: result?.message?.id
+          ? String(result.message.id)
+          : null,
+        messageType: 'text',
+        message: trimmed,
+      });
+
+      setInputText('');
+      await fetchConversationMessages(conversationId, myUserId);
+    } catch (error) {
+      console.error('Send message error:', error);
+      showToast(error instanceof Error ? error.message : 'Could not send message.');
+    }
   }
 
   function insertEmoji(e: string) {
@@ -330,17 +545,9 @@ export default function ChatApp() {
   }
 
   function sendPhoto(uri: string) {
-    if (!activeChatId) return;
-    appendMessage(activeChatId, {
-      id: nextId(),
-      chatId: activeChatId,
-      sender: 'me',
-      type: 'image',
-      imageUri: uri,
-      timestamp: fmtTime(),
-      read: false,
-    });
-    autoReply(activeChatId);
+    // The current backend has file_url but no upload endpoint. Do not store a
+    // device-local URI as if it were a shareable server file.
+    showToast('Photo upload needs a file-upload API first.');
   }
 
   async function pickFileQuick() {
@@ -353,38 +560,38 @@ export default function ChatApp() {
   }
 
   function sendFile(name: string, size: string) {
-    if (!activeChatId) return;
-    appendMessage(activeChatId, {
-      id: nextId(),
-      chatId: activeChatId,
-      sender: 'me',
-      type: 'file',
-      fileName: name,
-      fileSize: size,
-      timestamp: fmtTime(),
-      read: false,
-    });
-    autoReply(activeChatId);
+    showToast('File upload needs a file-upload API first.');
   }
 
-  function shareLocation() {
+  async function shareLocation() {
     if (isBlocked) return showToast('You have blocked this user.');
-    if (!activeChatId) return;
+    if (!activeChatId || !conversationId || !myUserId || !API_URL) return;
     setShowAttachSheet(false);
-    // Mock coordinates (would come from a real geolocation API on-device)
-    const lat = 22.5726 + (Math.random() - 0.5) * 0.05;
-    const lng = 88.3639 + (Math.random() - 0.5) * 0.05;
-    appendMessage(activeChatId, {
-      id: nextId(),
-      chatId: activeChatId,
-      sender: 'me',
-      type: 'location',
-      lat,
-      lng,
-      timestamp: fmtTime(),
-      read: false,
-    });
-    autoReply(activeChatId);
+
+    // Temporary coordinates matching the existing UI. Replace this with the
+    // real device geolocation when that API is connected.
+    const lat = 22.5726;
+    const lng = 88.3639;
+
+    try {
+      const response = await fetch(`${API_URL}/api/chat/${conversationId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          senderId: Number(myUserId),
+          messageType: 'location',
+          content: JSON.stringify({ lat, lng }),
+          fileUrl: null,
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) throw new Error(result?.error || 'Could not share location.');
+      await fetchConversationMessages(conversationId, myUserId);
+    } catch (error) {
+      console.error('Share location error:', error);
+      showToast(error instanceof Error ? error.message : 'Could not share location.');
+    }
   }
 
   function quickShareLocationFromProfile() {
@@ -418,18 +625,14 @@ export default function ChatApp() {
     await audioRecorder.stop();
     await setAudioModeAsync({ allowsRecording: false });
     const uri = audioRecorder.uri;
-    appendMessage(activeChatId, {
-      id: nextId(),
-      chatId: activeChatId,
-      sender: 'me',
-      type: 'audio',
-      audioDuration: duration,
-      audioUri: uri ?? undefined,
-      timestamp: fmtTime(),
-      read: false,
-    });
     setRecordSeconds(0);
-    autoReply(activeChatId);
+
+    // The DB can store file_url, but the backend currently has no upload
+    // endpoint. A local Expo URI is not usable by other riders, so do not
+    // persist it as a fake server file.
+    if (uri) {
+      showToast('Voice upload needs a file-upload API first.');
+    }
   }
 }
 
@@ -543,7 +746,20 @@ export default function ChatApp() {
         {!mine && activeContact && (
           <Image source={{ uri: activeContact.avatar }} style={styles.msgAvatar} />
         )}
+        {/* Show sender name for other riders */}
+        {/* {!mine && (
+          <Text style={styles.senderName}>
+            {item.senderName || 'Rider'}
+          </Text>
+        )} */}
+
         <View style={{ maxWidth: '72%' }}>
+        {/* Sender name */}
+        {!mine && (
+          <Text style={styles.senderName}>
+            {item.senderName || 'Rider'}
+          </Text>
+        )}
           <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
             {item.type === 'text' && (
               <Text style={mine ? styles.bubbleTextMine : styles.bubbleTextTheirs}>{item.text}</Text>
@@ -1132,6 +1348,13 @@ const WHITE = '#FFFFFF';
 const ONLINE = '#39D98A';
 
 const styles = StyleSheet.create({
+  senderName: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FF8A80',
+    marginBottom: 4,
+    marginLeft: 4,
+  },
   bgImage: {
     ...StyleSheet.absoluteFillObject,
      backgroundColor: '#0D0E12',

@@ -2182,11 +2182,11 @@ router.post('/:rideId/accept', async (req, res) => {
          seats_requested,
          status
        )
-       VALUES ($1, $2, 'driver', 1, 'active')
+       VALUES ($1, $2, 'driver', 0, 'active')
        ON CONFLICT (ride_id, user_id)
        DO UPDATE SET
          role = 'driver',
-         seats_requested = 1,
+         seats_requested = 0,
          status = 'active'`,
       [
         Number(rideId),

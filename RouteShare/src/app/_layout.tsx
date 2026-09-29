@@ -4,6 +4,9 @@ import { useColorScheme } from 'react-native';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
 import { useEffect, useRef, useState } from 'react';
 import RouteTransitionOverlay from '../components/RouteTransitionOverlay';
+import JoinRequestToast from "@/components/JoinRequestToast";
+import ChatMessageToast from "@/components/ChatMessageToast";
+// import JoinRequestToast from "../components/JoinRequestToast";
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
@@ -34,6 +37,8 @@ export default function RootLayout() {
           <Stack.Screen name="chat" />
           <Stack.Screen name="shareRide" />
         </Stack>
+        <JoinRequestToast  />
+        <ChatMessageToast />
         <RouteTransitionOverlay active={transitioning} />
         </SafeAreaProvider>
       </ThemeProvider>

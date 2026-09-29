@@ -476,19 +476,19 @@ return () => {
   //               denied elsewhere), the server sends `join_request_closed`
   //               so we dismiss the modal instead of acting on a stale one.
   // ------------------------------------------------------------------ */
-  const [incomingJoinRequest, setIncomingJoinRequest] = useState<{
-    joinRequestId: string;
-    requesterName: string;
-    pickup: string;
-    destination: string;
-    seatsRequested: number;
-  } | null>(null);
-  const [joinDecisionSending, setJoinDecisionSending] = useState(false);
-    useEffect(() => {
-    const socket = getSocket();
-    const join = () => myUserId && socket.emit("rider_online", { riderId: myUserId });
-    if (socket.connected) join();
-    else socket.once("connect", join);
+  // const [incomingJoinRequest, setIncomingJoinRequest] = useState<{
+  //   joinRequestId: string;
+  //   requesterName: string;
+  //   pickup: string;
+  //   destination: string;
+  //   seatsRequested: number;
+  // } | null>(null);
+  // const [joinDecisionSending, setJoinDecisionSending] = useState(false);
+  //   useEffect(() => {
+  //   const socket = getSocket();
+  //   const join = () => myUserId && socket.emit("rider_online", { riderId: myUserId });
+  //   if (socket.connected) join();
+  //   else socket.once("connect", join);
 
     // The server's rideId is the DB ride id — that's `requestId` on this page.
     // (`rideId` in the URL can be the ride *class* like "mini", so don't compare to it.)
@@ -499,10 +499,10 @@ return () => {
     //   if (rideId && p === String(rideId)) return true;
     //   return !requestId && !rideId; // no ids known -> don't filter
     // };
-    const isForThisRide = (payloadRideId: any) => {
-      if (payloadRideId == null || !requestId) return false;
-      return String(payloadRideId) === String(requestId);
-    };
+    // const isForThisRide = (payloadRideId: any) => {
+    //   if (payloadRideId == null || !requestId) return false;
+    //   return String(payloadRideId) === String(requestId);
+    // };
 
     // const handleJoinRequestPending = (payload: any) => {
     //   console.log("📩 join_request_pending received:", payload, { requestId, rideId });
@@ -515,103 +515,103 @@ return () => {
     //     seatsRequested: payload.seatsRequested ?? 1,
     //   });
     // };
-    const handleJoinRequestPending = (payload: any) => {
-      console.log("🔥 JOIN REQUEST RECEIVED:", payload);
+  //   const handleJoinRequestPending = (payload: any) => {
+  //     console.log("🔥 JOIN REQUEST RECEIVED:", payload);
     
-      if (!isForThisRide(payload?.rideId)) {
-        console.log("❌ Join request does NOT belong to this ride:", { payloadRideId: payload?.rideId, rideId });
-        console.log("❌ Join request belongs to another ride");
-        return;
-      }
+  //     if (!isForThisRide(payload?.rideId)) {
+  //       console.log("❌ Join request does NOT belong to this ride:", { payloadRideId: payload?.rideId, rideId });
+  //       console.log("❌ Join request belongs to another ride");
+  //       return;
+  //     }
     
-      console.log("✅ Join request belongs to THIS ride");
+  //     console.log("✅ Join request belongs to THIS ride");
     
-      setIncomingJoinRequest({
-        joinRequestId: String(payload.joinRequestId),
-        requesterName: payload.requesterName ?? "A rider",
-        pickup: payload.pickup ?? "—",
-        destination: payload.destination ?? "—",
-        seatsRequested: payload.seatsRequested ?? 1,
-      });
-    };
+  //     setIncomingJoinRequest({
+  //       joinRequestId: String(payload.joinRequestId),
+  //       requesterName: payload.requesterName ?? "A rider",
+  //       pickup: payload.pickup ?? "—",
+  //       destination: payload.destination ?? "—",
+  //       seatsRequested: payload.seatsRequested ?? 1,
+  //     });
+  //   };
 
-    const handleJoinRequestClosed = (payload: any) => {
-      setIncomingJoinRequest((prev) =>
-        prev && String(prev.joinRequestId) === String(payload?.joinRequestId) ? null : prev
-      );
-    };
+  //   const handleJoinRequestClosed = (payload: any) => {
+  //     setIncomingJoinRequest((prev) =>
+  //       prev && String(prev.joinRequestId) === String(payload?.joinRequestId) ? null : prev
+  //     );
+  //   };
 
-    socket.on("join_request_pending", handleJoinRequestPending);
-    socket.on("join_request_closed", handleJoinRequestClosed);
-    return () => {
-      socket.off("join_request_pending", handleJoinRequestPending);
-      socket.off("join_request_closed", handleJoinRequestClosed);
-    };
-  }, [rideId, requestId, myUserId]);
+  //   socket.on("join_request_pending", handleJoinRequestPending);
+  //   socket.on("join_request_closed", handleJoinRequestClosed);
+  //   return () => {
+  //     socket.off("join_request_pending", handleJoinRequestPending);
+  //     socket.off("join_request_closed", handleJoinRequestClosed);
+  //   };
+  // }, [rideId, requestId, myUserId]);
 
-  const respondToJoinRequest = (
-    decision: "allow" | "deny"
-  ) => {
-    if (!incomingJoinRequest || joinDecisionSending) return;
+  // const respondToJoinRequest = (
+  //   decision: "allow" | "deny"
+  // ) => {
+  //   if (!incomingJoinRequest || joinDecisionSending) return;
   
-    if (!myUserId) {
-      console.error("User ID not found.");
-      showToast("Could not identify your account.");
-      return;
-    }
+  //   if (!myUserId) {
+  //     console.error("User ID not found.");
+  //     showToast("Could not identify your account.");
+  //     return;
+  //   }
   
-    setJoinDecisionSending(true);
+  //   setJoinDecisionSending(true);
   
-    const socket = getSocket();
+  //   const socket = getSocket();
   
-    socket.emit(
-      "join_request_rider_decision",
-      {
-        joinRequestId: incomingJoinRequest.joinRequestId,
-        riderId: Number(myUserId),
-        decision,
-      },
-      (response: any) => {
+  //   socket.emit(
+  //     "join_request_rider_decision",
+  //     {
+  //       joinRequestId: incomingJoinRequest.joinRequestId,
+  //       riderId: Number(myUserId),
+  //       decision,
+  //     },
+  //     (response: any) => {
   
-        console.log("🔥 RIDER DECISION RESPONSE:", response);
+  //       console.log("🔥 RIDER DECISION RESPONSE:", response);
   
-        if (!response?.ok) {
-          console.error(
-            "Failed to process rider decision:",
-            response?.error
-          );
+  //       if (!response?.ok) {
+  //         console.error(
+  //           "Failed to process rider decision:",
+  //           response?.error
+  //         );
   
-          showToast(
-            response?.error || "Could not process the request."
-          );
+  //         showToast(
+  //           response?.error || "Could not process the request."
+  //         );
   
-          setJoinDecisionSending(false);
-          return;
-        }
+  //         setJoinDecisionSending(false);
+  //         return;
+  //       }
   
-        // Close modal
-        setIncomingJoinRequest(null);
+  //       // Close modal
+  //       setIncomingJoinRequest(null);
   
-        if (decision === "allow") {
+  //       if (decision === "allow") {
   
-          if (response.status === "waiting_driver") {
-            showToast(
-              "You allowed the new rider — waiting for the driver."
-            );
-          } else {
-            showToast(
-              "You allowed the new rider — waiting for other passengers."
-            );
-          }
+  //         if (response.status === "waiting_driver") {
+  //           showToast(
+  //             "You allowed the new rider — waiting for the driver."
+  //           );
+  //         } else {
+  //           showToast(
+  //             "You allowed the new rider — waiting for other passengers."
+  //           );
+  //         }
   
-        } else {
-          showToast("You denied the join request.");
-        }
+  //       } else {
+  //         showToast("You denied the join request.");
+  //       }
   
-        setJoinDecisionSending(false);
-      }
-    );
-  };
+  //       setJoinDecisionSending(false);
+  //     }
+  //   );
+  // };
 
   return (
     <View style={styles.root}>
@@ -636,7 +636,7 @@ return () => {
       </Animated.View>
 
       {/* "New rider wants to join" approval sheet */}
-      <Modal visible={!!incomingJoinRequest} animationType="fade" transparent>
+      {/* <Modal visible={!!incomingJoinRequest} animationType="fade" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.joinRequestSheet}>
             <Ionicons name="people-circle" size={40} color={colors.brand} style={{ alignSelf: "center" }} />
@@ -666,7 +666,7 @@ return () => {
             </View>
           </View>
         </View>
-      </Modal>
+      </Modal> */}
 
       <ScrollView contentContainerStyle={[styles.content, isWide && styles.contentWide]} showsVerticalScrollIndicator={false}>
         
